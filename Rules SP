@@ -1,0 +1,2692 @@
+REPLACE MACRO  QSIT_APRA2_BRL_RRP_PGM.BSNSMD_RUL_DWNLDR
+AS (
+   
+  SELECT DISTINCT
+ RLMSTR.RUL_NM
+, RLMSTR.RUL_DESC
+, RLMSTR.TY		
+, CASE RLMSTR.DQ_TY  
+  WHEN 'Y' THEN 'YES'
+  ELSE 'NO' END AS DQ_TY
+, RLMSTR.SRC_SYS_CD             
+,ENTSTR.BSNS_ENT_NM
+,CCMSTR.CC_SHRT_NM        
+,CCVAL.CC_VAL_SHRT_NM         
+,CASE RLMSTR.IS_DFLT     
+WHEN 'Y' THEN 'YES'
+ELSE 'NO' END AS IS_DFLT
+,RLMSTR.PRTY    
+,ATRMSTR.BSNS_ATTR_NM 
+,RLATTR.LINK_TY
+  ,
+CASE	WHEN LSTVAL.VAL IS NOT NULL
+  THEN LSTVAL.VAL
+  ELSE NULL
+  END  AS VAL
+ ,
+CASE	WHEN  VAL IS NULL
+ THEN LSTRNG.LOW_COND
+ ELSE ''		
+ END AS LOW_COND
+ ,
+CASE	WHEN  VAL IS NULL
+ THEN LSTRNG.LOW_VAL
+ ELSE ''		
+ END AS LOW_VAL
+ ,
+CASE	WHEN  VAL IS NULL
+ THEN LSTRNG.HGH_COND
+ ELSE ''		
+ END AS HGH_COND
+ ,
+CASE	WHEN  VAL IS NULL
+ THEN LSTRNG.HGH_VAL
+ ELSE ''		
+ END AS HGH_VAL
+ ,ENTSTR1.BSNS_ENT_NM
+ ,TRGDTL.PRTN_BY_COL_LST
+ ,TRGDTL.ORDR_BY_COL_LST
+ FROM QSIT_APRA2_BRL_RRP_VW.RUL_MSTR_S          			RLMSTR
+ INNER JOIN
+ QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S          						ENTSTR
+ ON RLMSTR.DATA_ENT_ID = ENTSTR.ENT_ID
+  INNER JOIN
+ QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S          						ENTSTR1
+ ON RLMSTR.TRG_ENT_ID = ENTSTR1.ENT_ID
+INNER JOIN
+QSIT_APRA2_BRL_RRP_VW.CC_MSTR_S 										CCMSTR
+	ON	RLMSTR.CC_ID = CCMSTR.CC_ID
+INNER JOIN
+QSIT_APRA2_BRL_RRP_VW.CC_VAL_S											CCVAL
+	ON	
+CCMSTR.CC_ID = CCVAL.CC_VAL_ID       
+INNER JOIN
+QSIT_APRA2_BRL_RRP_VW.RUL_ATTR_S 									RLATTR
+	ON	RLMSTR.RUL_ID = RLATTR.RUL_ID
+
+INNER JOIN
+QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR_S								ATRMSTR 
+	ON	RLATTR.ATTR_ID = ATRMSTR.ATTR_ID
+
+INNER JOIN
+QSIT_APRA2_BRL_RRP_VW.LST_MSTR_S									LSTMSTR
+	ON	ATRMSTR.ATTR_ID = LSTMSTR.ATTR_ID
+  AND RLATTR.LST_ID = LSTMSTR.LST_ID
+ 
+LEFT OUTER JOIN
+QSIT_APRA2_BRL_RRP_VW.LST_VAL_CSV										LSTVAL
+	ON	LSTMSTR.LST_ID = LSTVAL.LST_ID
+
+ 
+LEFT OUTER JOIN 
+QSIT_APRA2_BRL_RRP_VW.LST_RNG_S										LSTRNG
+	ON	LSTMSTR.LST_ID = LSTRNG.LST_ID
+
+INNER JOIN
+QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL_S					 		TRGDTL
+	ON	RLMSTR.RUL_ID= TRGDTL.RUL_ID
+
+-- WHERE RLMSTR.RUL_NM =  'CAP APRA Loan Purpose'
+
+
+QUALIFY	RANK() OVER(PARTITION BY LSTVAL.LST_ID 
+ORDER	BY LSTVAL.ROW_NBR) = 1;
+   );
+--------------------------------------------------------------------------------
+
+REPLACE	PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BSNSMD_RUL_EXEC
+-- =============================================
+-- Description: This Stored Procedure calls the RTN_QUERY proc for an optional CC_ID and RUL_ID.
+-- Change log
+--      [2016 02 02]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(  
+IN iExec_Mode							VARCHAR(2),
+IN iRul_Id 									INTEGER,
+IN iCC_Id 									INTEGER,
+OUT oReturn_Code					SMALLINT,			/* 0: Successful; Non-Zero: Error */
+OUT oReturn_Message			VARCHAR(1000)
+)
+
+MAIN:
+BEGIN
+-- Declare variables
+DECLARE	cLF 							CHAR(2) DEFAULT '0A'XC;
+DECLARE	vCC_ID 							VARCHAR(10000) DEFAULT '';
+DECLARE	vRUL_ID 						VARCHAR(10000) DEFAULT '';
+DECLARE	sql_stmt 						VARCHAR(50000);
+DECLARE	sql_stmt1 						VARCHAR(50000);
+DECLARE	inCC_Id 						INTEGER DEFAULT NULL;
+DECLARE	inRUL_ID						INTEGER DEFAULT NULL;
+DECLARE	oSubReturn_Code                	SMALLINT;
+DECLARE oSubReturn_Message         		VARCHAR(1000);
+DECLARE	oSubReturn_Code_rtn_query       SMALLINT;
+DECLARE oSubReturn_Message_rtn_query    VARCHAR(30000);
+DECLARE oSubReturnSQL_Text				VARCHAR(30000);
+DECLARE vTRG_ENT_NM 					VARCHAR(255);
+DECLARE vActivity_Count 				INTEGER;
+DECLARE	vCntr 							INTEGER DEFAULT 100;
+DECLARE	vSQL_Code 						INTEGER;
+DECLARE	vSQL_State 						VARCHAR(6);
+DECLARE	vError_Text 					VARCHAR(256);
+DECLARE	vDebugLvl 						SMALLINT DEFAULT 5; -- 5 = verbose
+DECLARE	vLogMsg 						VARCHAR(1000);
+DECLARE	vLogMsgFixed 					VARCHAR(1000);
+DECLARE	vLogMsgVariable 				VARCHAR(1000);
+DECLARE	vLogSPName 						VARCHAR(255) DEFAULT 'BSNSMD_RUL_EXEC';
+DECLARE vRULID_COUNT 					INTEGER;
+DECLARE vCCID_COUNT 					INTEGER;
+DECLARE	vStr1 							VARCHAR(1000) DEFAULT '';
+DECLARE	vStr2 							VARCHAR(1000) DEFAULT '';
+DECLARE vENT_NM VARCHAR(1000) DEFAULT '';
+-- Error Handler
+DECLARE	EXIT HANDLER FOR SQLEXCEPTION
+BEGIN	
+	SET vSQL_Code  = SQLCODE;
+	SET vSQL_State = SQLSTATE;
+	GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsgVariable = 'Failed (Exited at handler ''SQLEXCEPTION'') - ' || 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	SET vLogMsg = vLogMsgFixed || ' : ' || vLogMsgVariable;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg,
+	vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	
+	SET oReturn_Code = 2;
+	SET oReturn_Message = vLogMsg;
+END	;
+/*
+-- If attribute name is not returned by above query, then throw an user error and stop the process
+DECLARE	EXIT HANDLER FOR NOT FOUND
+BEGIN	
+			
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsgVariable = 'Failed (Exited at handler ''NOT FOUND'') - ' || 'Failure at next step of the step which says ''' || vLogMsgVariable || ''' because no rows were returned from the sql.';
+	SET vLogMsg = vLogMsgFixed || ' : ' || vLogMsgVariable;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg,
+	vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	
+	SET oReturn_Code = 1;
+	SET oReturn_Message = vLogMsg;			
+END	;
+*/
+-- Set the fixed part of the log message.
+SET	vLogMsgFixed =  'For Rule Id = ' || TRIM(vRUL_ID) || ' and Cc_Id = ' || TRIM(iCc_Id);
+
+-- Message Log portion
+SET	vCntr = vCntr + 1; -- Increase step number by 1
+SET	vLogMsgVariable = 'Process - Started';
+SET	vLogMsg = vLogMsgFixed || ' : ' || vLogMsgVariable;
+SET	vDebugLvl = 0;
+CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+/*************************INVALID RUL_ID & CC_ID****************************************/
+IF iRUL_ID <> '' OR  iCC_ID <> '' THEN
+IF iRUL_ID <> ''  THEN
+	SELECT COUNT(*) INTO :vRULID_COUNT FROM QSIT_APRA2_BRL_RRP_VW.RUL_MSTR_S RUL_MSTR WHERE RUL_MSTR.RUL_ID = iRUL_ID;
+ELSE SET vRULID_COUNT=1;
+END IF;
+
+IF iCC_ID <> ''THEN 
+	SELECT COUNT(*) INTO :vCCID_COUNT FROM QSIT_APRA2_BRL_RRP_VW.CC_MSTR_S CC_MSTR WHERE CC_MSTR.CC_ID = iCC_ID;
+ELSE 
+	SET vCCID_COUNT=1;
+END IF;
+
+
+CASE 	WHEN vRULID_COUNT= 0 THEN
+		SET	vStr1 = 'Process - Failed. Invalid RUL_ID submitted = ' ||iRUL_ID;
+		ELSE SET	vStr1 ='';
+END CASE;
+CASE
+		WHEN vCCID_COUNT= 0 THEN
+		SET	vStr2 = 'Process - Failed. Invalid CC_ID submitted = ' ||iCC_ID;
+		ELSE SET	vStr2 ='';
+END CASE;
+
+IF vRULID_COUNT= 0 OR vCCID_COUNT= 0 THEN
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET	vLogMsgVariable = vStr1||cLF||vStr2;
+SET vLogMsg = vLogMsgVariable;
+SET	vDebugLvl = 1;
+CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+SET oReturn_Code = 2  ;
+SET oReturn_Message = vLogMsg;		
+LEAVE MAIN;
+END IF;	
+END IF;	
+
+/*****************************************************************/
+
+-- If the input ICC_ID is blank - Set it to NULL 
+IF	iCC_ID = '' THEN
+	SET	inCC_ID = NULL;
+ELSE	
+	SET	inCC_ID = iCC_ID;
+END IF;
+
+-- If the input ICC_ID is blank - Set it to NULL 
+IF	iRUL_ID = '' THEN
+	SET	inRUL_ID = NULL;
+ELSE	
+	SET	inRUL_ID = iRUL_ID;
+END IF;
+
+/*
+L_DEL: -- Target table cleanup
+FOR CSR_DEL AS
+			SELECT DISTINCT ENT_NM 
+			FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S em 
+			INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_MSTR rm
+			ON em.ENT_ID = rm.TRG_ENT_ID
+			AND rm.CC_ID =COALESCE(inCC_ID, rm.CC_ID)
+			AND rm.RUL_ID = COALESCE(inRUL_ID, rm.RUL_ID)
+DO
+			IF iExec_Mode = 'Y' THEN 	
+						
+				SET vTRG_ENT_NM = CSR_DEL.ENT_NM;
+						
+			
+				IF vTRG_ENT_NM = 'OVRD_AR_TO_GL_LNK_INTER' THEN 
+					SET sql_stmt = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.' || vTRG_ENT_NM || ';';
+				ELSE
+					SET sql_stmt = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.' || vTRG_ENT_NM || '  TRG WHERE 1=1'
+											|| ' AND RUL_ID = COALESCE(' || COALESCE(inRUL_ID,'NULL') || ', TRG.RUL_ID) '
+											|| ' AND CC_ID = COALESCE(' ||COALESCE(inCC_ID,'NULL')  || ', TRG.CC_ID); ';
+				END IF;
+
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsg =   '/* Generated SQL is: */ /*' || cLF ||  sql_stmt;
+				SET	vDebugLvl = 5;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+				EXECUTE IMMEDIATE sql_stmt;
+				SET vActivity_Count = ACTIVITY_COUNT;
+				
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsgVariable = 'For iExec_Mode = Y, Records in target table ' || vTRG_ENT_NM || 'deleted for  RUL_ID = ' ||  COALESCE(inRUL_ID,'ALL') || ' No of affected rows are :' || TRIM(vActivity_Count);
+				SET	vLogMsg =  vLogMsgVariable;
+				SET	vDebugLvl = 1;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+	 END IF;
+	 
+	
+END FOR L_DEL;
+*/
+L1: 
+-- Open a Cursor to hold a CC_ID value
+FOR	CSR1 AS 
+	SELECT	CC_ID
+	FROM QSIT_APRA2_BRL_RRP_VW.CC_MSTR_S 
+	WHERE CC_ID = COALESCE(inCC_ID,CC_ID) 
+	--WHERE CC_ID = inCC_ID  
+	ORDER BY PRTY
+DO
+	SET vCC_ID = CSR1.CC_ID;   
+
+	-- Message Log portion
+	SET	vCntr = vCntr + 1; -- Increase step number by 1
+	SET	vLogMsgVariable = 'Fetch CC_ID value into 1st Cursor - Completed   Value : '||TRIM(vCC_ID);
+	SET	vLogMsg = vLogMsgVariable;
+	SET	vDebugLvl = 1;
+	CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	
+
+L_DEL:-- Work  table cleanup
+FOR CSR_DEL AS
+			SELECT DISTINCT ENT_NM 
+			FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S em 
+			INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_MSTR rm
+			ON em.ENT_ID = rm.TRG_ENT_ID
+			AND rm.CC_ID =CSR1.CC_ID
+			AND rm.RUL_ID = COALESCE(inRUL_ID, rm.RUL_ID)
+
+DO
+			IF iExec_Mode = 'Y' THEN 	
+						
+				SET vTRG_ENT_NM = CSR_DEL.ENT_NM;
+				SET sql_stmt = 'DELETE FROM QSIT_APRA2_BRL_RRP_WK.' || vTRG_ENT_NM || ';';
+
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsg =   '/* Generated SQL is: */ ' || cLF ||  sql_stmt;
+				SET	vDebugLvl = 5;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+				EXECUTE IMMEDIATE sql_stmt;
+				SET vActivity_Count = ACTIVITY_COUNT;
+				
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsgVariable = 'For iExec_Mode = Y, Records in target WK  table ' || vTRG_ENT_NM || 'deleted for  RUL_ID = ' ||  COALESCE(inRUL_ID,'ALL') || ' No of affected rows are :' || TRIM(vActivity_Count);
+				SET	vLogMsg =  vLogMsgVariable;
+				SET	vDebugLvl = 1;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+	 END IF;
+	 
+	
+END FOR L_DEL;
+
+
+	L2: 
+	-- Open a Cursor to hold the RUL_ID value for the above given CC_ID
+	FOR CSR2 AS
+		SELECT RUL_MSTR.RUL_ID AS RUL_ID, COALESCE (RUL_MSTR.TRG_ENT_ID, '') AS TRG_ENT_ID
+		FROM QSIT_APRA2_BRL_RRP_VW.RUL_MSTR_S RUL_MSTR
+		LEFT OUTER JOIN 	QSIT_APRA2_BRL_RRP_VW.CC_VAL_S CC_VAL
+			ON RUL_MSTR.CC_ID = CC_VAL.CC_ID
+			AND CASE RUL_MSTR.TY WHEN 'PASSTHRU' THEN -99 ELSE CC_VAL.CC_VAL_ID END = COALESCE (RUL_MSTR.CC_VAL_ID, '')
+ WHERE RUL_MSTR.CC_ID= CSR1.CC_ID
+	 		AND COALESCE(inRUL_ID, RUL_ID) = RUL_ID
+		GROUP BY RUL_MSTR.RUL_ID, RUL_MSTR.TRG_ENT_ID,  CC_VAL.PRTY, RUL_MSTR.PRTY
+		ORDER BY COALESCE(CC_VAL.PRTY,1), RUL_MSTR.PRTY
+	DO
+		SET vRUL_ID = CSR2.RUL_ID;  
+		
+		SET	vLogMsgFixed =  'For Rule Id = ' || TRIM(vRUL_ID) || ' and Cc_Id = ' || TRIM(iCc_Id);
+
+		-- Message Log portion
+		SET	vCntr = vCntr + 1; -- Increase step number by 1
+		SET	vLogMsgVariable = 'Fetch RUL_ID value into 2nd Cursor - Completed  Value : '||TRIM(vRUL_ID);
+		SET	vLogMsg =  vLogMsgVariable;
+		SET	vDebugLvl = 1;
+		CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+		
+		-- SQL Generation 
+		CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_RTN_QUERY(vRUL_ID,vCC_ID,oSubReturn_Code_rtn_query, oSubReturn_Message_rtn_query,oSubReturnSQL_Text );
+		
+		-- Message Log portion
+		SET	vCntr = vCntr + 1; -- Increase step number by 1
+		SET	vLogMsgVariable = 'SQL Generation - Completed';
+		SET	vLogMsg = vLogMsgVariable;
+		SET	vDebugLvl = 1;
+		CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+		
+		-- Insert the generated SQL into a target table
+		SET sql_stmt = 'MERGE INTO QSIT_APRA2_BRL_RRP_WK.BSNSMD_RUL_GEN_QUERY tgt
+										USING
+										( SELECT 
+											' || vRUL_ID || ' AS Rul_Id
+											,' || vCC_ID || ' AS CC_Id
+											,''' || OREPLACE(oSubReturnSQL_Text,'''','''''')  || ''' AS GenSQLText
+											,CURRENT_TIMESTAMP(6) AS Log_Ts
+											,USER AS Usr_Id
+										) src
+										ON tgt.Rul_Id = src.Rul_Id
+										AND tgt.CC_Id = src.CC_Id
+										WHEN MATCHED THEN 
+										UPDATE 
+										SET GenSQLText = src.GenSQLText,
+										          Log_Ts = src.Log_Ts,
+												  Usr_ID = src.Usr_ID
+										WHEN NOT MATCHED THEN
+										INSERT (
+										       src.Rul_Id,
+										       src.CC_Id,
+										       src.GenSQLText,
+										       src.Log_Ts,
+										       src.Usr_Id
+										);';
+		
+		-- Message Log portion
+		SET	vCntr = vCntr + 1; -- Increase step number by 1
+		SET	vLogMsgVariable = '--SQL that will be executed is:' || cLF || sql_stmt;
+		SET	vLogMsg = vLogMsgVariable;
+		SET	vDebugLvl = 1;
+		CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+		
+		EXECUTE IMMEDIATE sql_stmt;
+		SET vActivity_Count = ACTIVITY_COUNT;
+		
+		-- Message Log portion
+		SET	vCntr = vCntr + 1; -- Increase step number by 1
+		SET	vLogMsgVariable = TRIM(vActivity_Count) || ' records into table QSIT_APRA2_BRL_RRP_WK.BSNSMD_RUL_GEN_QUERY';
+		SET	vLogMsg = vLogMsgVariable;
+		SET	vDebugLvl = 1;
+		CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	
+		IF oSubReturn_Code = 0 THEN
+			SET oReturn_Code = oSubReturn_Code_rtn_query ;
+			SET oReturn_Message = oSubReturn_Message_rtn_query ;
+	
+			-- Execute the SQL generated by the RTN_QUERY procedure for the below condition.
+			IF iExec_Mode = 'Y' THEN 	
+					
+				
+				-- Insert data
+				SET sql_stmt =   oSubReturnSQL_Text;
+				
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsg =   '/* Generated SQL is: */' || cLF ||  sql_stmt;
+				SET	vDebugLvl = 5;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsgVariable = 'Rule ID = '||TRIM(CSR2.Rul_ID) || ' , Before Execute Immediate';
+				SET	vLogMsg =  vLogMsgVariable;
+				SET	vDebugLvl = 1;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+			
+				
+				EXECUTE IMMEDIATE sql_stmt;
+				SET vActivity_Count = ACTIVITY_COUNT;
+				
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsgVariable = 'Rule ID = '||TRIM(CSR2.Rul_ID) || ' , After Execute Immediate - Completed. No of affected rows are :' || TRIM(vActivity_Count);
+				SET	vLogMsg =  vLogMsgVariable;
+				SET	vDebugLvl = 1;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+			
+			END IF;	
+		ELSE	
+			SET oReturn_Code = oSubReturn_Code_rtn_query  ;
+			SET oReturn_Message = oSubReturn_Message_rtn_query  ;		
+		END IF;
+SET	vLogMsgFixed =  'For Rule Id = ' || TRIM(vRUL_ID) || ' and Cc_Id = ' || TRIM(iCc_Id);
+
+
+L_STATS:-- Collect stats on WK table starts here
+FOR CSR_DEL AS
+			SELECT DISTINCT ENT_NM 
+			FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S em 
+			INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_MSTR rm
+			ON em.ENT_ID = rm.TRG_ENT_ID
+			AND rm.CC_ID =CSR1.CC_ID
+			AND rm.RUL_ID = COALESCE(inRUL_ID, rm.RUL_ID)
+
+DO
+			IF iExec_Mode = 'Y' THEN 	
+						
+				SET vTRG_ENT_NM = CSR_DEL.ENT_NM;
+				SET sql_stmt = 'COLLECT STATISTICS on temporary QSIT_APRA2_BRL_RRP_WK.' || vTRG_ENT_NM || ';';
+	
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsg =   '/* Generated statement is: */ ' || cLF ||  sql_stmt;
+				SET	vDebugLvl = 5;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+				EXECUTE IMMEDIATE sql_stmt;
+				SET vActivity_Count = ACTIVITY_COUNT;
+				
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsgVariable = 'Statistics collected on ' || vTRG_ENT_NM || ' :' || TRIM(vActivity_Count);
+				SET	vLogMsg =  vLogMsgVariable;
+				SET	vDebugLvl = 1;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+	 END IF;
+	 
+	
+END FOR L_STATS;
+
+	END FOR L2;
+	
+
+	---------------- Merging into Main Table stats here
+
+	L_MERGE: -- Target table cleanup
+FOR CSR_MERGE AS
+			SELECT DISTINCT ENT_NM 
+			FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S em 
+			INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_MSTR rm
+			ON em.ENT_ID = rm.TRG_ENT_ID
+			AND rm.CC_ID =CSR1.CC_ID
+			AND rm.RUL_ID = COALESCE(inRUL_ID, rm.RUL_ID)
+DO
+			IF iExec_Mode = 'Y' THEN 	
+			        
+					SET vTRG_ENT_NM = CSR_MERGE.ENT_NM;
+                    IF vTRG_ENT_NM = 'OVRD_AR_TO_GL_LNK_INTER' THEN 
+							SET sql_stmt = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.' || vTRG_ENT_NM || ';';
+					ELSE
+							SET sql_stmt = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.' || vTRG_ENT_NM || '  TRG WHERE 1=1'
+											|| ' AND RUL_ID = COALESCE(' || COALESCE(inRUL_ID,'NULL') || ', TRG.RUL_ID) '
+											|| ' AND CC_ID = COALESCE(' ||COALESCE(inCC_ID,'NULL')  || ', TRG.CC_ID); ';
+					END IF;
+
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsg =   '/* Generated SQL is: */' || cLF ||  sql_stmt;
+				SET	vDebugLvl = 5;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+				EXECUTE IMMEDIATE sql_stmt;
+				SET vActivity_Count = ACTIVITY_COUNT;
+				
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsgVariable = 'For iExec_Mode = Y, Records in target table ' || vTRG_ENT_NM || 'deleted for  RUL_ID = ' ||  COALESCE(inRUL_ID,'ALL') || ' No of affected rows are :' || TRIM(vActivity_Count);
+				SET	vLogMsg =  vLogMsgVariable;
+				SET	vDebugLvl = 1;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+				SET SQL_STMT = ' INSERT INTO QSIT_APRA2_BRL_RRP_VW.'||vTRG_ENT_NM||'   SELECT * FROM QSIT_APRA2_BRL_RRP_WK.'||vTRG_ENT_NM||';';
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsg =   '/* Generated SQL is: */' || cLF ||  sql_stmt;
+				SET	vDebugLvl = 5;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+				EXECUTE IMMEDIATE sql_stmt;
+				SET vActivity_Count = ACTIVITY_COUNT;
+				
+				-- Message Log portion
+				SET	vCntr = vCntr + 1; -- Increase step number by 1
+				SET	vLogMsgVariable = 'For iExec_Mode = Y, Records Merged in target table ' || vTRG_ENT_NM || ' for  RUL_ID = ' ||  COALESCE(inRUL_ID,'ALL') || ' No of affected rows are :' || TRIM(vActivity_Count);
+				SET	vLogMsg =  vLogMsgVariable;
+				SET	vDebugLvl = 1;
+				CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+				
+	 END IF;
+	 
+	
+END FOR L_MERGE;
+
+	---------------- Merging into Main Table ends here
+	
+	END FOR L1;
+
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET	vLogMsgVariable = 'Process - Completed';
+SET vLogMsg = vLogMsgFixed || ' : ' || vLogMsgVariable;
+SET	vDebugLvl = 1;
+CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+END;
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR
+-- =============================================
+-- Description: This Stored Procedure will call the other procedures for uploader activity.
+-- Change log
+--      [2015 02 04]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(
+IN iEffv_Dt DATE,
+OUT oReturn_Code SMALLINT, /* 0: Successful; Non-Zero: Error */
+OUT oReturn_Message VARCHAR(1000)
+)
+MAIN:
+BEGIN
+-- Declare variables
+DECLARE cLF CHAR(2) DEFAULT '0A'XC;
+DECLARE vCntr INTEGER DEFAULT 100;
+DECLARE vActivity_Ct INTEGER DEFAULT -99;
+DECLARE vSQL_Text VARCHAR(10000) DEFAULT '';
+DECLARE vSQL_Code INTEGER;
+DECLARE vSQL_State VARCHAR(6);
+DECLARE vError_Text VARCHAR(256);
+DECLARE oSubReturn_Code SMALLINT;
+DECLARE oSubReturn_Message VARCHAR(1000);
+DECLARE vDebugLvl SMALLINT DEFAULT 5; -- 5 = verbose
+DECLARE vLogMsg VARCHAR(1000);
+DECLARE vLogSPName VARCHAR(255) DEFAULT 'BSNSMD_UPLDR';
+
+
+-- Error Handler
+DECLARE EXIT HANDLER FOR SQLEXCEPTION
+BEGIN
+    SET vSQL_Code  = SQLCODE;
+    SET vSQL_State = SQLSTATE;
+    GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+    
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''SQLEXCEPTION'') - ' || 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+    SET oReturn_Code = 2;
+    SET oReturn_Message = vLogMsg;
+END;
+
+--UNCOMMENT IT WHEN GOOD DATA IS AVAILABLE
+/*-- If attribute name is not returned by above query, then throw an user error and stop the process
+DECLARE EXIT HANDLER FOR NOT FOUND
+BEGIN
+	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''NOT FOUND'') - ' || 'Failure at next step of the step which says ''' || vLogMsg || ''' because no rows were returned from the sql.';
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	SET oReturn_Code = 1;
+	SET oReturn_Message = vLogMsg;
+END;
+*/
+
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Started';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** to generate surrogate keys
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Before calling procedure to generate surrogate keys';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR_GEN_SURRKEY (oSubReturn_Code, oSubReturn_Message);
+IF oSubReturn_Code <> 0 THEN
+    SET oReturn_Code = oSubReturn_Code;
+    SET oReturn_Message = oSubReturn_Message;
+    LEAVE MAIN;
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'After calling procedure to generate surrogate keys';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- **************************************************** validate data (pre merge)
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Before calling procedure to validate data (pre merge)';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+ CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR_VALIDATE_PREMERGE (oSubReturn_Code, oSubReturn_Message);
+IF oSubReturn_Code <> 0 THEN
+    SET oReturn_Code = oSubReturn_Code;
+    SET oReturn_Message = oSubReturn_Message;
+    LEAVE MAIN;
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'After calling procedure to validate data (pre merge)';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- **************************************************** merge data
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Before calling procedure to merge data';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR_MERGE (iEffv_Dt, oSubReturn_Code, oSubReturn_Message);
+IF oSubReturn_Code <> 0 THEN
+    SET oReturn_Code = oSubReturn_Code;
+    SET oReturn_Message = oSubReturn_Message;
+    LEAVE MAIN;
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'After calling procedure to merge data';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+/*
+-- **************************************************** validate data (post merge)
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Before calling procedure to validate data (post merge)';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR_VALIDATE_PSTMERGE (oSubReturn_Code, oSubReturn_Message);
+IF oSubReturn_Code <> 0 THEN
+    SET oReturn_Code = oSubReturn_Code;
+    SET oReturn_Message = oSubReturn_Message;
+    LEAVE MAIN;
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'After calling procedure to validate data (post merge)';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+*/
+
+-- ****************************************************  exiting
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Completed';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+SET oReturn_Code = 0;
+SET oReturn_Message = vLogMsg;
+
+END MAIN;
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR_GEN_SURRKEY
+-- =============================================
+-- Description: This Stored Procedure will generate/ derive the surrogate keys and update the uploader intermediate table.
+-- Change log
+--      [2015 02 04]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(
+OUT oReturn_Code SMALLINT, /* 0: Successful; Non-Zero: Error */
+OUT oReturn_Message VARCHAR(1000)
+)
+MAIN:
+BEGIN
+-- Declare variables
+DECLARE cLF CHAR(2) DEFAULT '0A'XC;
+DECLARE vCntr INTEGER DEFAULT 100;
+DECLARE vActivity_Ct INTEGER DEFAULT -99;
+DECLARE vSQL_Text VARCHAR(10000) DEFAULT '';
+DECLARE vSQL_Code INTEGER;
+DECLARE vSQL_State VARCHAR(6);
+DECLARE vError_Text VARCHAR(256);
+DECLARE oSubReturn_Code SMALLINT;
+DECLARE oSubReturn_Message VARCHAR(1000);
+DECLARE vDebugLvl SMALLINT DEFAULT 5; -- 5 = verbose
+DECLARE vLogMsg VARCHAR(10000);
+DECLARE vLogSPName VARCHAR(255) DEFAULT 'BSNSMD_UPLDR_GEN_SURRKEY';
+
+
+-- Error Handler
+DECLARE EXIT HANDLER FOR SQLEXCEPTION
+BEGIN
+    SET vSQL_Code  = SQLCODE;
+    SET vSQL_State = SQLSTATE;
+    GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+    
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''SQLEXCEPTION'') - ' || 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+    SET oReturn_Code = 2;
+    SET oReturn_Message = vLogMsg;
+END;
+/*
+-- If attribute name is not returned by above query, then throw an user error and stop the process
+DECLARE EXIT HANDLER FOR NOT FOUND
+BEGIN
+	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''NOT FOUND'') - ' || 'Failure at next step of the step which says ''' || vLogMsg || ''' because no rows were returned from the sql.';
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	SET oReturn_Code = 1;
+	SET oReturn_Message = vLogMsg;
+END;
+*/
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Started';
+
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- *********************************** Delete Intermediate Table
+SET vSQL_Text = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_UPLDR_INTER Deleted - ' || TRIM(vActivity_Ct) || ' Rows Deleted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- *********************************** Load Intermediate Table
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER (
+ RUL_NM
+,RUL_ID
+,RUL_DESC
+,TY
+,DQ_TY
+,SRC_SYS_CD
+,SRC_ENT_NM
+,BSNS_SRC_ENT_NM
+,SRC_ENT_ID
+,CC
+,CC_ID
+,CC_VAL
+,CC_VAL_ID
+,IS_DFLT
+,PRTY
+,FLTR_COL_NM
+,BSNS_FLTR_COL_NM
+,FLTR_COL_ATTR_ID
+,LST_ID
+,FLTR_COND
+,FLTR_VAL
+,FLTR_LOW_COND
+,FLTR_LOW_VAL
+,FLTR_HGH_COND
+,FLTR_HGH_VAL
+,TRG_TBL
+,BSNS_TRG_TBL
+,TRG_TBL_ENT_ID
+,SRC_ATTR_ID
+,TRG_ATTR_ID
+,PRCS_FLG
+,ERR_MSG
+,IS_GEN
+,PRTN_BY_COL_LST
+,ORDR_BY_COL_LST
+)
+SELECT
+ RUL_NM AS RUL_NM
+,NULL AS RUL_ID
+,RUL_DESC AS RUL_DESC
+,TY AS TY
+,DQ_TY AS DQ_TY
+,SRC_SYS_CD AS SRC_SYS_CD
+,NULL AS SRC_ENT_NM
+,SRC_ENT_NM AS BSNS_SRC_ENT_NM -- source data hold business names
+,NULL AS SRC_ENT_ID
+,CC AS CC
+,NULL AS CC_ID
+,CC_VAL AS CC_VAL
+,NULL AS CC_VAL_ID
+,IS_DFLT AS IS_DFLT
+,PRTY AS PRTY
+,NULL AS FLTR_COL_NM
+,FLTR_COL_NM AS BSNS_FLTR_COL_NM -- source data hold business names
+,NULL AS FLTR_COL_ATTR_ID
+,NULL AS LST_ID
+,FLTR_COND AS FLTR_COND
+,FLTR_VAL AS FLTR_VAL
+,FLTR_LOW_COND AS FLTR_LOW_COND
+,FLTR_LOW_VAL AS FLTR_LOW_VAL
+,FLTR_HGH_COND AS FLTR_HGH_COND
+,FLTR_HGH_VAL AS FLTR_HGH_VAL
+,NULL AS TRG_TBL
+,TRG_TBL AS BSNS_TRG_TBL -- source data hold business names
+,NULL AS TRG_TBL_ENT_ID
+,NULL AS SRC_ATTR_ID
+,NULL AS TRG_ATTR_ID
+,''N'' AS PRCS_FLG
+,NULL AS ERR_MSG
+,''N'' AS IS_GEN
+,PRTN_BY_COL_LST AS PRTN_BY_COL_LST
+,ORDR_BY_COL_LST AS ORDR_BY_COL_LST
+FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_UPLDR_INTER Loaded - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- *********************************** Update FLTR_COL_NM in Intermediate Table
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+FROM (SELECT ATTR_NM, BSNS_ATTR_NM, ENT_NM, BSNS_ENT_NM FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR_S a INNER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S e ON a.ENT_ID = e.ENT_ID ) a
+SET FLTR_COL_NM = ATTR_NM
+WHERE BSNS_FLTR_COL_NM = BSNS_ATTR_NM
+AND BSNS_SRC_ENT_NM = BSNS_ENT_NM;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Update FLTR_COL_NM in Intermediate Table - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- *********************************** Update TRG_TBL in Intermediate Table
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+FROM (SELECT ENT_NM, BSNS_ENT_NM FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S) a
+SET TRG_TBL = ENT_NM
+WHERE BSNS_TRG_TBL = BSNS_ENT_NM;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Update TRG_TBL in Intermediate Table - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- *********************************** Update SRC_ENT_NM in Intermediate Table
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+FROM (SELECT ENT_NM, BSNS_ENT_NM FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S) a
+SET SRC_ENT_NM = ENT_NM
+WHERE BSNS_SRC_ENT_NM = BSNS_ENT_NM;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Update SRC_ENT_NM in Intermediate Table - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+--*********************************** SRC_ENT_ID derivation
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER  
+                FROM (SELECT ENT_ID, ENT_NM FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S GROUP BY 1, 2) src
+                SET SRC_ENT_ID = src.ENT_ID
+                WHERE SRC_ENT_NM = src.ENT_NM;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Column SRC_ENT_ID derived - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+--*********************************** CC_ID derivation
+SET vSQL_Text = ' UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER  
+						                FROM (SELECT CC_ID, CC_SHRT_NM FROM QSIT_APRA2_BRL_RRP_VW.CC_MSTR_S GROUP BY 1, 2) src
+						                SET CC_ID = src.CC_ID
+						                WHERE CC = src.CC_SHRT_NM;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Column CC_ID derived - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+--*********************************** CC_VAL_ID derivation
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER  
+                FROM (SELECT rui.TY, rui.CC_ID, CASE WHEN  rui.TY = ''PASSTHRU'' THEN -99 ELSE ccv.CC_VAL_ID END AS CC_VAL_ID, COALESCE (ccv.CC_VAL_SHRT_NM, rui.CC_VAL) AS CC_VAL_NM
+                                 FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER rui
+                                 LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.CC_VAL_S ccv
+                                 ON rui.CC_ID = ccv.CC_ID
+                                 ---AND rui.CC_VAL = ccv.CC_VAL_NM
+                                 AND rui.CC_VAL = ccv.CC_VAL_SHRT_NM
+                                 GROUP BY 1, 2, 3, 4) src
+                SET CC_VAL_ID = SRC.CC_VAL_ID
+                WHERE CC_VAL = src.CC_VAL_NM
+                --WHERE CC_VAL = src.CC_VAL_SHRT_NM
+                AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.TY = src.TY
+                AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.CC_ID = src.CC_ID;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Column CC_VAL_ID derived - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+--*********************************** FLTR_COL_ATTR_ID derivation
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER  
+                FROM (SELECT ENT_ID, ATTR_ID, ATTR_NM, BSNS_ATTR_NM FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR_S   GROUP BY 1, 2, 3, 4) src
+                SET FLTR_COL_ATTR_ID = src.ATTR_ID
+                WHERE FLTR_COL_NM = src.ATTR_NM
+				AND BSNS_FLTR_COL_NM = src.BSNS_ATTR_NM
+                AND SRC_ENT_ID = src.ENT_ID;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Column FLTR_COL_ATTR_ID derived - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+--*********************************** TRG_TBL_ENT_ID derivation
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER  
+                FROM (SELECT ENT_ID, ENT_NM FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR_S GROUP BY 1, 2) src
+                SET TRG_TBL_ENT_ID = src.ENT_ID
+                WHERE TRG_TBL = src.ENT_NM;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Column TRG_TBL_ENT_ID derived - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+--*********************************** SRC_ATTR_ID & TRG_ATTR_ID derivation - for 1st PK column
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER 
+										FROM (
+											SELECT	
+											 RUI.RUL_NM
+											,COALESCE(RUI.FLTR_COL_ATTR_ID,0) AS FLTR_COL_ATTR_ID
+											,RUI.SRC_ENT_ID
+											,RUI.TRG_TBL_ENT_ID
+											,AM_SRC.ATTR_ID AS SRC_ATTR_ID
+											,AM_TRG.ATTR_ID AS TRG_ATTR_ID
+											FROM	QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER RUI
+											LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR_S  AM_SRC
+											ON RUI.SRC_ENT_ID = AM_SRC.ENT_ID
+												AND COALESCE (AM_SRC.IS_PK, '''') = ''Y''
+											LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR_S   AM_TRG
+											ON RUI.TRG_TBL_ENT_ID = AM_TRG.ENT_ID
+												AND COALESCE (AM_TRG.IS_PK, '''') = ''Y''
+											WHERE RUI.IS_GEN = ''N''
+											AND AM_TRG.ATTR_NM = AM_SRC.ATTR_NM
+											AND COALESCE(AM_SRC.ATTR_ID, AM_TRG.ATTR_ID) IS NOT NULL
+											QUALIFY ROW_NUMBER() OVER(PARTITION BY RUL_NM, COALESCE(FLTR_COL_ATTR_ID, 0) ORDER BY COALESCE(AM_SRC.ATTR_ID, AM_TRG.ATTR_ID)) = 1 -- Update the values for 1st PK column
+										) SRC
+										SET SRC_ATTR_ID = SRC.SRC_ATTR_ID
+													,TRG_ATTR_ID = SRC.TRG_ATTR_ID
+										WHERE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.RUL_NM = SRC.RUL_NM
+										AND COALESCE(QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.FLTR_COL_ATTR_ID, 0) = SRC.FLTR_COL_ATTR_ID
+										AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.SRC_ENT_ID = SRC.SRC_ENT_ID
+										AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.TRG_TBL_ENT_ID = SRC.TRG_TBL_ENT_ID;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Columns SRC_ATTR_ID & TRG_ATTR_ID derivation - for 1st PK column derived - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+--*********************************** SRC_ATTR_ID & TRG_ATTR_ID derivation - Next set of PKs
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER (
+										 RUL_NM
+										,RUL_ID
+										,RUL_DESC
+										,TY
+										,DQ_TY
+										,SRC_SYS_CD
+										,SRC_ENT_NM
+										,BSNS_SRC_ENT_NM
+										,SRC_ENT_ID
+										,CC
+										,CC_ID
+										,CC_VAL
+										,CC_VAL_ID
+										,IS_DFLT
+										,PRTY
+										,FLTR_COL_NM
+										,BSNS_FLTR_COL_NM
+										,FLTR_COL_ATTR_ID
+										,LST_ID
+										,FLTR_COND
+										,FLTR_VAL
+										,FLTR_LOW_COND
+										,FLTR_LOW_VAL
+										,FLTR_HGH_COND
+										,FLTR_HGH_VAL
+										,TRG_TBL
+										,BSNS_TRG_TBL
+										,TRG_TBL_ENT_ID
+										,SRC_ATTR_ID
+										,TRG_ATTR_ID
+										,PRCS_FLG
+										,ERR_MSG
+										,IS_GEN
+										)
+										SELECT	
+										 RUI.RUL_NM
+										,RUI.RUL_ID
+										,RUI.RUL_DESC
+										,RUI.TY
+										,RUI.DQ_TY
+										,RUI.SRC_SYS_CD
+										,RUI.SRC_ENT_NM
+										,RUI.BSNS_SRC_ENT_NM
+										,RUI.SRC_ENT_ID
+										,RUI.CC
+										,RUI.CC_ID
+										,RUI.CC_VAL
+										,RUI.CC_VAL_ID
+										,RUI.IS_DFLT
+										,RUI.PRTY
+										,RUI.FLTR_COL_NM
+										,RUI.BSNS_FLTR_COL_NM
+										,RUI.FLTR_COL_ATTR_ID
+										,RUI.LST_ID
+										,RUI.FLTR_COND
+										,RUI.FLTR_VAL
+										,RUI.FLTR_LOW_COND
+										,RUI.FLTR_LOW_VAL
+										,RUI.FLTR_HGH_COND
+										,RUI.FLTR_HGH_VAL
+										,RUI.TRG_TBL
+										,RUI.BSNS_TRG_TBL
+										,RUI.TRG_TBL_ENT_ID
+										,AM_SRC.ATTR_ID AS SRC_ATTR_ID
+										,AM_TRG.ATTR_ID AS TRG_ATTR_ID
+										,RUI.PRCS_FLG
+										,RUI.ERR_MSG
+										,''Y'' AS IS_GEN
+										FROM	QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER RUI
+										LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR_S  AM_SRC
+										ON RUI.SRC_ENT_ID = AM_SRC.ENT_ID
+											AND COALESCE (AM_SRC.IS_PK, '''') IN (''Y'',''P'')
+										LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR_S   AM_TRG
+										ON RUI.TRG_TBL_ENT_ID = AM_TRG.ENT_ID
+											AND COALESCE (AM_TRG.IS_PK, '''')  IN (''Y'',''P'')
+										WHERE RUI.IS_GEN = ''N''
+										AND AM_TRG.ATTR_NM = AM_SRC.ATTR_NM
+										AND COALESCE(AM_SRC.ATTR_ID, AM_TRG.ATTR_ID) IS NOT NULL -- Insert the values for other PK columns (more than 1 PK)
+										QUALIFY ROW_NUMBER() OVER(PARTITION BY RUL_NM, COALESCE(FLTR_COL_ATTR_ID, 0) ORDER BY COALESCE(AM_SRC.ATTR_ID, AM_TRG.ATTR_ID)) > 1; ';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Columns SRC_ATTR_ID & TRG_ATTR_ID derivation - Next set of PKs derived - ' || TRIM(vActivity_Ct) || ' ROWS Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+--*********************************** RUL_ID derivation
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER  
+                FROM (SELECT 
+								ru.Rul_Nm AS Rul_Nm
+								,COALESCE(rm.Rul_Id, Max_Cnt + Row_Cnt) AS Rul_Id
+								FROM
+								(SELECT Rul_Nm, ROW_NUMBER() OVER(ORDER BY Rul_Nm) AS Row_Cnt
+								FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER GROUP BY 1 )  ru
+								LEFT OUTER JOIN (SELECT Rul_Id, Rul_Nm FROM QSIT_APRA2_BRL_RRP_VW.RUL_MSTR_S ) rm
+								ON ru.RUL_NM = rm.RUL_NM
+								CROSS JOIN (SELECT COALESCE (MAX(Rul_Id),0) AS Max_Cnt FROM QSIT_APRA2_BRL_RRP_VW.RUL_MSTR_S ) rm_max
+								GROUP BY 1, 2) src
+                SET RUL_ID = src.RUL_ID
+                WHERE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.Rul_Nm = src.Rul_Nm;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Column RUL_ID derived - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+--*********************************** LST_ID derivation
+SET vSQL_Text = 'UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER  
+                FROM (SELECT 
+								ru.Rul_Id AS Rul_Id
+								,COALESCE(rm.LST_ID, Max_Cnt + Row_Cnt) AS LST_ID		
+								,FLTR_COL_ATTR_ID
+								,FLTR_COND						
+								FROM
+								(SELECT RUL_ID, FLTR_COL_ATTR_ID, FLTR_COND, ROW_NUMBER() OVER(ORDER BY Rul_Id) AS Row_Cnt
+								FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER 
+							--	WHERE FLTR_COND NOT IN (''NULL'', ''NOT NULL'') 
+								GROUP BY 1, 2, 3 )  ru
+								LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_ATTR_S  rm
+								ON ru.Rul_Id = rm.Rul_Id
+								AND ru.FLTR_COND = rm.LINK_TY
+								AND ru.FLTR_COL_ATTR_ID = rm.ATTR_ID
+								CROSS JOIN (SELECT COALESCE (MAX(LST_ID),0) AS Max_Cnt FROM QSIT_APRA2_BRL_RRP_VW.RUL_ATTR_S ) rm_max
+								GROUP BY 1, 2, 3,4) src
+                SET LST_ID = src.LST_ID
+                WHERE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.Rul_Id = src.Rul_Id
+                AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.FLTR_COL_ATTR_ID = SRC.FLTR_COL_ATTR_ID
+                AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.FLTR_COND = SRC.FLTR_COND;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Column LST_ID derived - ' || TRIM(vActivity_Ct) || ' Rows Updated';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Completed';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+SET oReturn_Code = 0;
+SET oReturn_Message = vLogMsg;
+
+END MAIN;
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR_MERGE
+-- =============================================
+-- Description: This Stored Procedure will perform insert into BSNS metadata tables from uploader intermediate table.
+-- Change log
+--      [2015 02 04]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(
+IN iEffv_Dt DATE,
+OUT oReturn_Code SMALLINT, /* 0: Successful; Non-Zero: Error */
+OUT oReturn_Message VARCHAR(1000)
+)
+MAIN:
+BEGIN
+-- Declare variables
+DECLARE cLF CHAR(2) DEFAULT '0A'XC;
+DECLARE vCntr INTEGER DEFAULT 100;
+DECLARE vActivity_Ct INTEGER DEFAULT -99;
+DECLARE vFilterExpression VARCHAR(10000);
+DECLARE vTokenCount SMALLINT DEFAULT 0;
+DECLARE vToken VARCHAR(100);
+DECLARE vIs_Present CHAR(1);
+DECLARE vSQL_Text VARCHAR(10000) DEFAULT '';
+DECLARE vSQL_Code INTEGER;
+DECLARE vSQL_State VARCHAR(6);
+DECLARE vError_Text VARCHAR(256);
+DECLARE oSubReturn_Code SMALLINT;
+DECLARE oSubReturn_Message VARCHAR(1000);
+DECLARE vDebugLvl SMALLINT DEFAULT 5; -- 5 = verbose
+DECLARE vLogMsg VARCHAR(10000);
+DECLARE vLogSPName VARCHAR(255) DEFAULT 'BSNSMD_UPLDR_MERGE';
+DECLARE vEffv_Dt VARCHAR(30);
+DECLARE vExpr_Dt VARCHAR(30) ;
+DECLARE vUsr_Id VARCHAR(255) DEFAULT USER;
+
+-- Error Handler
+DECLARE EXIT HANDLER FOR SQLEXCEPTION
+BEGIN
+    SET vSQL_Code  = SQLCODE;
+    SET vSQL_State = SQLSTATE;
+    GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+    
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''SQLEXCEPTION'') - ' || 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+    SET oReturn_Code = 2;
+    SET oReturn_Message = vLogMsg;
+END;
+/*
+-- If attribute name is not returned by above query, then throw an user error and stop the process
+DECLARE EXIT HANDLER FOR NOT FOUND
+BEGIN
+	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''NOT FOUND'') - ' || 'Failure at next step of the step which says ''' || vLogMsg || ''' because no rows were returned from the sql.';
+	
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	SET oReturn_Code = 1;
+	SET oReturn_Message = vLogMsg;
+END;
+*/
+-- Set the fixed part of the log message.
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Started';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- set values for effective date and expiry date
+SET vEffv_Dt = CAST(iEffv_Dt AS DATE FORMAT 'YYYY-MM-DD');
+SET vExpr_Dt = CAST('9999-12-31' AS DATE FORMAT 'YYYY-MM-DD');
+
+
+-- ***********************************  RUL_MSTR - Expiration
+SET vSQL_Text = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.RUL_MSTR WHERE RUL_ID IN (SELECT RUL_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER GROUP BY 1);';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_MSTR Cleaned Up - ' || TRIM(vActivity_Ct) || ' Rows Deleted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+
+-- ***********************************  RUL_MSTR - Insert
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.RUL_MSTR ( 
+																							RUL_ID
+																				           ,RUL_NM
+																				           ,TY
+																				           ,RUL_DESC
+																				           ,DQ_TY
+																				           ,SRC_SYS_CD
+																				           ,IS_DFLT
+																				           ,DATA_ENT_ID
+																				           ,TRG_ENT_ID
+																				           ,CC_ID
+																				           ,CC_VAL_ID
+																				           ,PRTY
+																				           ,EFFV_DT
+																				           ,EXPR_DT
+																				           ,USR_ID
+																							) SELECT 
+																							 RUL_ID
+																							,RUL_NM
+																							,TY
+																							,RUL_DESC 
+																							,DQ_TY
+																							,SRC_SYS_CD
+																							,IS_DFLT 
+																							,SRC_ENT_ID AS DATA_ENT_ID
+																							,TRG_TBL_ENT_ID AS TRG_ENT_ID
+																							,CC_ID
+																							,CC_VAL_ID
+																							,PRTY
+																							, ''' || vEffv_Dt || ''' (date)' || cLF
+																							|| ',''' || vExpr_Dt || ''' (date)' || cLF
+																							|| ',''' || vUsr_Id || '''
+																							FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+																							GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_MSTR Inserted - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- ***********************************  RUL_ATTR - Expiration
+SET vSQL_Text = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.RUL_ATTR WHERE RUL_ID IN (SELECT RUL_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER GROUP BY 1);';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_ATTR Cleaned Up - ' || TRIM(vActivity_Ct) || ' Rows Deleted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- ***********************************  RUL_ATTR - Insert
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.RUL_ATTR ( 
+																							RUL_ID
+																				           ,ATTR_ID
+																				           ,LINK_TY
+																				           ,LST_ID
+																				           ,EFFV_DT
+																						   ,EXPR_DT
+																						   ,USR_ID
+																							) 
+																							SELECT 
+																							RUL_ID
+																							,FLTR_COL_ATTR_ID AS ATTR_ID
+																							,CASE 
+																							 WHEN FLTR_COND = ''BEGIN WITH'' THEN ''LIKE''
+																							 WHEN FLTR_COND = ''END WITH'' THEN ''LIKE''
+																							 WHEN FLTR_COND = ''CONTAINS'' THEN ''LIKE''
+																							 WHEN FLTR_COND = ''NULL'' THEN ''IS NULL''
+																							 WHEN FLTR_COND = ''NOT NULL'' THEN ''IS NOT NULL''
+																							 ELSE FLTR_COND
+																							 END AS LINK_TY
+																							,LST_ID
+																							, ''' || vEffv_Dt || ''' (date)' || cLF
+																							|| ',''' || vExpr_Dt || ''' (date)' || cLF
+																							|| ',''' || vUsr_Id || '''
+																							FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER 
+																							WHERE FLTR_COND <> ''''
+																							AND   FLTR_COND <> ''SETVAL''
+																							GROUP BY 1, 2, 3, 4, 5, 6, 7;';
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_ATTR Inserted - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- ***********************************  LST_MSTR - Expiration
+SET vSQL_Text = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.LST_MSTR WHERE LST_ID IN (SELECT ra.LST_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER ru INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_ATTR ra ON ru.RUL_ID = ra.RUL_ID GROUP BY 1)';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table LST_MSTR Cleaned Up - ' || TRIM(vActivity_Ct) || ' Rows Deleted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- ***********************************  LST_MSTR - Insert
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.LST_MSTR (LST_ID, ATTR_ID, LST_TY, EFFV_DT, EXPR_DT ,USR_ID )
+																																SELECT 
+																																LST_ID
+																																,FLTR_COL_ATTR_ID AS ATTR_ID
+																																,CASE 
+																																             WHEN FLTR_COND IN (''IN'', ''NOT IN'') THEN ''LOV''
+																																             WHEN FLTR_COND = ''RANGE'' THEN ''RANGE''
+																																			 ELSE FLTR_COND 
+																																END AS LST_TY
+																																, ''' || vEffv_Dt || ''' (date)' || cLF
+																																|| ',''' || vExpr_Dt || ''' (date)' || cLF
+																																|| ',''' || vUsr_Id || '''
+																																FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER 
+																																WHERE FLTR_COND NOT IN ('''', ''SETVAL'') -- , ''NULL'', ''NOT NULL'')
+																																GROUP BY 1, 2, 3, 4, 5, 6;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table LST_MSTR Inserted - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- ***********************************  LST_RNG - Expiration
+SET vSQL_Text = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.LST_RNG WHERE LST_ID IN (SELECT ra.LST_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER ru INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_ATTR ra ON ru.RUL_ID = ra.RUL_ID GROUP BY 1)';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table LST_RNG Cleaned Up - ' || TRIM(vActivity_Ct) || ' Rows Deleted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- ***********************************  LST_RNG - Insert
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.LST_RNG ( 
+																							LST_ID
+																				           ,LOW_VAL
+																				           ,LOW_COND
+																				           ,HGH_VAL
+																				           ,HGH_COND
+																				           ,EFFV_DT
+																				           ,EXPR_DT
+																				           ,USR_ID
+																							) SELECT 
+																							LST_ID
+																							,FLTR_LOW_VAL AS LOW_VAL
+																							,FLTR_LOW_COND AS LOW_COND
+																							,FLTR_HGH_VAL AS HGH_VAL
+																							,FLTR_HGH_COND AS HGH_COND
+																							, ''' || vEffv_Dt || ''' (date)' || cLF
+																							|| ',''' || vExpr_Dt || ''' (date)' || cLF
+																							|| ',''' || vUsr_Id || '''
+																							FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER 
+																							WHERE FLTR_COND = ''RANGE''
+																							GROUP BY 1, 2, 3, 4, 5, 6, 7, 8;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table LST_RNG Inserted - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- ***********************************  LST_VAL - Expiration
+	-- NOTE: After addition of audit column in LST_VAL table. This should be replaced by UPDATE statement to expire existing records for a LST_ID
+	SET vSQL_Text = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.LST_VAL WHERE LST_ID IN (SELECT ra.LST_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER ru INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_ATTR ra ON ru.RUL_ID = ra.RUL_ID GROUP BY 1)';
+	
+	-- Log SQL Text 
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+	SET vDebugLvl = 5;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	
+	EXECUTE IMMEDIATE vSQL_Text;
+	SET vActivity_Ct = ACTIVITY_COUNT;
+	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Table LST_VAL Cleaned Up - ' || TRIM(vActivity_Ct) || ' Rows Deleted';
+	SET vDebugLvl = 1;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- ***********************************  LST_VAL - Insert
+L1:
+FOR	CSR1 AS 
+	SELECT	
+	 LST_ID
+	 ,FLTR_VAL
+	 ,CHARACTERS(TRIM(FLTR_VAL)) - CHARACTERS(TRIM(OREPLACE(FLTR_VAL,',',''))) + 1 AS TokenCount
+	FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER 
+	WHERE FLTR_COND IN  ('IN' , 'NOT IN', 'CONTAINS', 'BEGIN WITH', 'END WITH')
+	GROUP BY 1, 2, 3
+	ORDER BY LST_ID
+DO
+	SET vFilterExpression = CSR1.FLTR_VAL;
+	SET vTokenCount = 0 ;
+    
+    -- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'First Level Loop - Fetched Filter Value.';
+	SET vDebugLvl = 4;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+    L2: LOOP
+    BEGIN
+		SET vTokenCount = vTokenCount + 1;
+		SET vToken = TRIM(STRTOK(vFilterExpression, ',', vTokenCount));
+		
+	    -- Message Log portion
+		SET vCntr = vCntr + 1; -- Increase step number by 1
+		SET vLogMsg = 'Second Level Loop  - Extracted Individual Token from Filter Value';
+		SET vDebugLvl = 5;
+		CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+		SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.LST_VAL (LST_ID, SQNC_NBR, VAL, EFFV_DT, EXPR_DT, USR_ID)
+													VALUES ( ' || CSR1.LST_ID || ',' || vTokenCount || ',''' || vToken || ''',''' || vEffv_Dt || ''' (date), ''' || vExpr_Dt || ''' (date), ''' || vUsr_Id || ''');';
+		
+		-- Log SQL Text 
+		SET vCntr = vCntr + 1; -- Increase step number by 1
+		SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+		SET vDebugLvl = 5;
+		CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+		EXECUTE IMMEDIATE vSQL_Text;
+		SET vActivity_Ct = ACTIVITY_COUNT;
+		
+		-- Message Log portion
+		SET vCntr = vCntr + 1; -- Increase step number by 1
+		SET vLogMsg = 'Table LST_VAL Inserted - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+		SET vDebugLvl = 1;
+		CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+		-- If the loop's token count is greater of equal to # of tokens present in token value then come out of the loop
+		IF vTokenCount >= CSR1.TokenCount THEN
+			LEAVE L2;
+		END IF;
+		
+	END;
+	END LOOP L2;
+END FOR L1;
+
+
+-- ***********************************  RUL_TRG_DTL - Expiration
+SET vSQL_Text = 'DELETE FROM QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL WHERE RUL_ID IN (SELECT RUL_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER GROUP BY 1);';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_TRG_DTL Cleaned Up - ' || TRIM(vActivity_Ct) || ' Rows Deleted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+
+-- ***********************************  RUL_TRG_DTL - Insert 
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL ( 
+										RUL_ID
+										,SQNC_NBR
+										,TRG_TY
+										,TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,PRTN_BY_COL_LST
+										,ORDR_BY_COL_LST
+										,EFFV_DT
+										,EXPR_DT
+										,USR_ID
+										) SELECT 
+										RUL_ID
+										,ROW_NUMBER () OVER(PARTITION BY RUL_ID ORDER BY RUL_ID) AS SQNC_NBR
+										,TRG_TY
+										,TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,PRTN_BY_COL_LST
+										,ORDR_BY_COL_LST
+										,EFFV_DT
+										,EXPR_DT
+										,USR_ID
+										FROM (
+										SELECT 
+										 RUL_ID
+										,''INSERT'' AS TRG_TY										
+										,NULL AS TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,NULL AS PRTN_BY_COL_LST
+										,NULL AS ORDR_BY_COL_LST
+										, ''' || vEffv_Dt || ''' (date) AS EFFV_DT' || cLF
+										|| ',''' || vExpr_Dt || ''' (date) AS EXPR_DT' || cLF
+										|| ',''' || vUsr_Id || ''' AS USR_ID
+										FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										WHERE FLTR_COND <> ''SETVAL''
+										GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) a
+										;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_TRG_DTL Inserted - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- ***********************************  RUL_TRG_DTL - Insert for ATTR_ID Column (TY = Ranking)
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL ( 
+										RUL_ID
+										,SQNC_NBR
+										,TRG_TY
+										,TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,PRTN_BY_COL_LST
+										,ORDR_BY_COL_LST
+										,EFFV_DT
+										,EXPR_DT
+										,USR_ID
+										) SELECT 
+										a.RUL_ID
+										, COALESCE (rui_max.max_cnt, 0) + ROW_NUMBER () OVER(PARTITION BY a.RUL_ID ORDER BY a.RUL_ID) AS SQNC_NBR
+										,TRG_TY
+										,TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,PRTN_BY_COL_LST
+										,ORDR_BY_COL_LST
+										,EFFV_DT
+										,EXPR_DT
+										,USR_ID
+										FROM (
+										SELECT 
+										 rui.RUL_ID
+										,''INSERT'' AS TRG_TY										
+										,ATTR_SRC.ATTR_ID AS TRG_VAL
+										,ATTR_TGT.ATTR_ID AS TRG_ATTR_ID
+										,NULL AS SRC_ATTR_ID
+										,NULL AS PRTN_BY_COL_LST
+										,NULL AS ORDR_BY_COL_LST
+										, ''' || vEffv_Dt || ''' (date) AS EFFV_DT' || cLF
+										|| ',''' || vExpr_Dt || ''' (date) AS EXPR_DT' || cLF
+										|| ',''' || vUsr_Id || ''' AS USR_ID
+										FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER rui
+										INNER JOIN(SELECT rui.RUL_ID, am.ATTR_ID, am.ENT_ID
+																		FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR am
+																		INNER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR em
+																		ON am.ENT_ID = em.ENT_ID
+																		INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER rui
+																		ON em.ENT_NM = rui.SRC_ENT_NM
+																		AND rui.TY = ''RANKING''							
+																		AND ATTR_NM = ''RNK_ID'' 
+																		GROUP BY 1, 2, 3 ) ATTR_SRC
+										ON rui. SRC_ENT_ID = ATTR_SRC.ENT_ID
+										AND rui.RUL_ID = ATTR_SRC.RUL_ID		
+										INNER JOIN(SELECT rui.RUL_ID, am.ATTR_ID, am.ENT_ID
+																		FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR am
+																		INNER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR em
+																		ON am.ENT_ID = em.ENT_ID
+																		INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER rui
+																		ON em.ENT_NM = rui.TRG_TBL
+																		AND rui.TY = ''RANKING''								
+																		AND ATTR_NM = ''ATTR_ID'' 
+																		GROUP BY 1, 2, 3 ) ATTR_TGT
+										ON rui. TRG_TBL_ENT_ID = ATTR_TGT.ENT_ID
+										AND rui.RUL_ID = ATTR_TGT.RUL_ID
+										WHERE rui.FLTR_COND <> ''SETVAL'' 
+										AND rui.TY = ''RANKING''
+										GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) a
+										
+										LEFT OUTER JOIN (SELECT RUL_ID, COUNT(1) AS max_cnt FROM QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL GROUP BY 1) rui_max
+										ON a.RUL_ID = rui_max.RUL_ID;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_TRG_DTL Inserted for ATTR_ID Column (TY = Ranking) rules - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- ***********************************  RUL_TRG_DTL - Insert for VAL Column (TY = Ranking)
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL ( 
+										RUL_ID
+										,SQNC_NBR
+										,TRG_TY
+										,TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,PRTN_BY_COL_LST
+										,ORDR_BY_COL_LST
+										,EFFV_DT
+										,EXPR_DT
+										,USR_ID
+										) SELECT 
+										a.RUL_ID
+										,COALESCE (rui_max.max_cnt, 0) + ROW_NUMBER () OVER(PARTITION BY a.RUL_ID ORDER BY a.RUL_ID) AS SQNC_NBR
+										,TRG_TY
+										,TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,PRTN_BY_COL_LST
+										,ORDR_BY_COL_LST
+										,EFFV_DT
+										,EXPR_DT
+										,USR_ID
+										FROM (SELECT 
+										 rui.RUL_ID
+										 ,''INSERT'' AS TRG_TY										
+										,NULL AS TRG_VAL
+										,ATTR_TGT.ATTR_ID AS TRG_ATTR_ID
+										,NULL AS SRC_ATTR_ID
+										,rui_prtn.PRTN_BY_COL_LST AS PRTN_BY_COL_LST
+										,rui_prtn.ORDR_BY_COL_LST AS ORDR_BY_COL_LST
+										, ''' || vEffv_Dt || ''' (date) AS EFFV_DT' || cLF
+										|| ',''' || vExpr_Dt || ''' (date) AS EXPR_DT' || cLF
+										|| ',''' || vUsr_Id || ''' AS USR_ID
+										FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER rui
+										INNER JOIN (SELECT RUL_ID, PRTN_BY_COL_LST, ORDR_BY_COL_LST FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										                            WHERE PRTN_BY_COL_LST IS NOT NULL AND ORDR_BY_COL_LST IS NOT NULL
+										                            GROUP BY 1, 2, 3) rui_prtn
+										ON rui.RUL_ID = rui_prtn.RUL_ID
+										INNER JOIN(SELECT rui.RUL_ID, am.ATTR_ID, am.ENT_ID
+																		FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR am
+																		INNER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR em
+																		ON am.ENT_ID = em.ENT_ID
+																		INNER JOIN QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER rui
+																		ON em.ENT_NM = rui.TRG_TBL
+																		AND rui.TY = ''RANKING''								
+																		AND ATTR_NM = ''VAL'' 
+																		GROUP BY 1, 2, 3 ) ATTR_TGT
+										ON rui. TRG_TBL_ENT_ID = ATTR_TGT.ENT_ID
+										AND rui.RUL_ID = ATTR_TGT.RUL_ID
+										WHERE rui.FLTR_COND <> ''SETVAL'' 
+										AND rui.TY = ''RANKING''
+										GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) a
+										LEFT OUTER JOIN (SELECT RUL_ID, COUNT(1) AS max_cnt FROM QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL GROUP BY 1) rui_max
+										ON a.RUL_ID = rui_max.RUL_ID
+										;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_TRG_DTL Inserted for VAL Column (TY = Ranking) rules - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- ***********************************  RUL_TRG_DTL - Insert for SETVAL
+SET vSQL_Text = 'INSERT INTO QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL ( 
+										RUL_ID
+										,SQNC_NBR
+										,TRG_TY
+										,TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,PRTN_BY_COL_LST
+										,ORDR_BY_COL_LST
+										,EFFV_DT
+										,EXPR_DT
+										,USR_ID
+										) SELECT 
+										a.RUL_ID
+										,rui_max.max_cnt + ROW_NUMBER () OVER(PARTITION BY a.RUL_ID ORDER BY a.RUL_ID) AS SQNC_NBR
+										,TRG_TY
+										,TRG_VAL
+										,TRG_ATTR_ID
+										,SRC_ATTR_ID
+										,PRTN_BY_COL_LST
+										,ORDR_BY_COL_LST
+										,EFFV_DT
+										,EXPR_DT
+										,USR_ID
+										FROM (
+										SELECT 
+										 rui.RUL_ID
+										,''SETVAL'' AS TRG_TY										
+										,FLTR_VAL AS TRG_VAL
+										,am.ATTR_ID AS TRG_ATTR_ID
+										,NULL AS SRC_ATTR_ID
+										,NULL AS PRTN_BY_COL_LST
+										,NULL AS ORDR_BY_COL_LST
+										, ''' || vEffv_Dt || ''' (date) AS EFFV_DT' || cLF
+										|| ',''' || vExpr_Dt || ''' (date) AS EXPR_DT' || cLF
+										|| ',''' || vUsr_Id || ''' AS USR_ID
+										FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER rui
+										INNER JOIN (SELECT ENT_ID, ATTR_ID, ATTR_NM FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR) am
+										ON rui.TRG_TBL_ENT_ID = am.ENT_ID
+										AND rui.FLTR_COL_NM = am.ATTR_NM
+										WHERE FLTR_COND = ''SETVAL'' 
+										GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) a
+										LEFT OUTER JOIN (SELECT RUL_ID, COUNT(1) AS max_cnt FROM QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL GROUP BY 1) rui_max
+										ON a.RUL_ID = rui_max.RUL_ID
+										;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Table RUL_TRG_DTL Inserted for SETVAL - ' || TRIM(vActivity_Ct) || ' Rows Inserted';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+
+-- ***********************************  Program End
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Completed';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+SET oReturn_Code = 0;
+SET oReturn_Message = vLogMsg;
+
+END MAIN;
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR_VALIDATE_PREMERGE
+-- =============================================
+-- Description: This Stored Procedure will call the other procedures for uploader activity.
+-- Change log
+--      [2015 02 04]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(
+OUT oReturn_Code SMALLINT, /* 0: Successful; Non-Zero: Error */
+OUT oReturn_Message VARCHAR(1000)
+)
+MAIN:
+BEGIN
+-- Declare variables
+DECLARE cLF CHAR(2) DEFAULT '0A'XC;
+DECLARE vCntr INTEGER DEFAULT 100;
+DECLARE vRecordCount INTEGER DEFAULT 100;
+DECLARE vActivity_Ct INTEGER DEFAULT -99;
+DECLARE vSQL_Text VARCHAR(10000) DEFAULT '';
+DECLARE vFailureMessage VARCHAR(10000) DEFAULT '';
+DECLARE vSQL_Code INTEGER;
+DECLARE vSQL_State VARCHAR(6);
+DECLARE vError_Text VARCHAR(256);
+DECLARE oSubReturn_Code SMALLINT;
+DECLARE oSubReturn_Message VARCHAR(1000);
+DECLARE vDebugLvl SMALLINT DEFAULT 5; -- 5 = verbose
+DECLARE vLogMsg VARCHAR(1000);
+DECLARE vLogSPName VARCHAR(255) DEFAULT 'BSNSMD_UPLDR_VALIDATE_PREMERGE';
+
+
+-- Error Handler
+DECLARE EXIT HANDLER FOR SQLEXCEPTION
+BEGIN
+    SET vSQL_Code  = SQLCODE;
+    SET vSQL_State = SQLSTATE;
+    GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+    
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''SQLEXCEPTION'') - ' || 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+    SET oReturn_Code = 2;
+    SET oReturn_Message = vLogMsg;
+END;
+
+--UNCOMMENT IT WHEN GOOD DATA IS AVAILABLE
+/*-- If attribute name is not returned by above query, then throw an user error and stop the process
+DECLARE EXIT HANDLER FOR NOT FOUND
+BEGIN
+	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''NOT FOUND'') - ' || 'Failure at next step of the step which says ''' || vLogMsg || ''' because no rows were returned from the sql.';
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	SET oReturn_Code = 1;
+	SET oReturn_Message = vLogMsg;
+END;
+*/
+
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Started';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- LST_ID, FLTR_COND Uniqueness
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										FROM (SELECT Rul_Nm, Rul_Id, Lst_Id, Fltr_Col_Attr_Id, Fltr_Cond, COUNT(*) AS Row_Cnt
+													FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER 
+													WHERE Is_Gen <> ''Y''
+													GROUP BY 1, 2, 3, 4, 5
+													HAVING COUNT(*) > 1 ) a
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''LIST ID AND FILTER CONDITION HAS MORE THAN 1 RECORD''
+                WHERE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.Rul_Id = a.Rul_Id
+				AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.Lst_Id = a.Lst_Id
+				AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.Fltr_Col_Attr_Id = a.Fltr_Col_Attr_Id
+				AND QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.Fltr_Cond = a.Fltr_Cond;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate LST_ID, FLTR_COND Uniqueness Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- CC_VAL_ID - LOOKUP condition SURR KEYS
+SET vSQL_Text ='UPDATE  QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''CC_VAL_ID IS NOT NULL FOR LOOKUP filter CONDITION''
+                WHERE RUL_ID IN (SELECT RUL_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER WHERE FLTR_COND = ''LOOKUP'' 
+                AND (CC_VAL <> '''' OR CASE WHEN TY = ''PASSTHRU'' THEN NULL ELSE CC_VAL_ID END IS NOT NULL));';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for CC_VAL_ID (lookup) Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- CC_VAL_ID all others SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''CC_VAL_ID IS NULL''
+                WHERE (CC_VAL <> '''' OR CASE WHEN TY = ''PASSTHRU'' THEN 1 ELSE CC_VAL_ID END IS NULL ) 
+				AND CC_VAL_ID IS NULL
+				AND RUL_ID NOT IN (SELECT RUL_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER WHERE FLTR_COND = ''LOOKUP'');';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for CC_VAL_ID (all others) Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- RUL_ID SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''RUL_ID IS NULL''
+                WHERE RUL_ID IS NULL ;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for RUL_ID Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- SRC_ENT_ID SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''SRC_ENT_ID IS NULL''
+                WHERE SRC_ENT_ID IS NULL ;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for SRC_ENT_ID Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- CC_ID SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''CC_ID IS NULL''
+                WHERE CC_ID IS NULL ;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for CC_ID Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- TRG_TBL_ENT_ID SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''TRG_TBL_ENT_ID IS NULL''
+                WHERE TRG_TBL_ENT_ID IS NULL ;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for TRG_TBL_ENT_ID Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- SRC_ATTR_ID SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''SRC_ATTR_ID IS NULL''
+                WHERE SRC_ATTR_ID IS NULL ;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for SRC_ATTR_ID Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- TRG_ATTR_ID SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''TRG_ATTR_ID IS NULL''
+                WHERE TRG_ATTR_ID IS NULL ;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for TRG_ATTR_ID Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- FLTR_COL_ATTR_ID SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''FLTR_COL_ATTR_ID IS NULL''
+                WHERE CASE WHEN FLTR_COND = '''' THEN 1 ELSE FLTR_COL_ATTR_ID END IS NULL;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for FLTR_COL_ATTR_ID Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- FLTR_COND SURR KEYS
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										    ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''FLTR_COND IS NULL''
+                WHERE CASE WHEN FLTR_COND = '''' THEN 1 ELSE FLTR_COND END IS NULL;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate SURR KEYS for FLTR_COND Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- FLTR_COND 
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''Invalid data in FLTR_COND''
+										WHERE  FLTR_COND NOT IN (''*'', ''IN'', ''NOT IN'', ''NULL'', ''NOT NULL'', ''RANGE'', ''LOOKUP'', ''CONTAINS'', ''BEGIN WITH'', ''END WITH'', ''SETVAL'')
+										AND FLTR_COL_NM <> '''';';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate data -- FLTR_COND Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- **************************************************** validate data -- FLTR_LOW_COND  & FLTR_HGH_COND
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										FROM (SELECT RUL_ID 
+															FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+															WHERE FLTR_COND = ''RANGE''
+															AND (
+																		(FLTR_LOW_COND NOT IN (''>'',''>='') AND FLTR_HGH_COND IS NULL)
+																		OR (FLTR_LOW_COND IS NULL AND FLTR_HGH_COND NOT IN (''<'', ''<=''))
+																		OR (FLTR_LOW_COND IS NULL AND FLTR_HGH_COND IS NULL)
+																		OR (FLTR_LOW_COND IS NULL AND FLTR_LOW_VAL IS NULL)
+																		OR (FLTR_HGH_COND IS NULL AND FLTR_HGH_VAL IS NULL)
+																		)) SRC
+										SET PRCS_FLG = ''E'',
+										           ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''Invalid data in FLTR_LOW_COND''
+										WHERE  QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.RUL_ID = SRC.RUL_ID;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate data -- FLTR_LOW_COND & FLTR_HGH_COND Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- PRTY 
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										           ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''NULL in PRTY''
+										WHERE  PRTY IS NULL;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate data -- PRTY Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- IS_DFLT 
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										           ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''Invalid data in IS_DFLT''
+										WHERE  IS_DFLT NOT IN (''Y'', ''N'');';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate data -- IS_DFLT Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data -- TY 
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''E'',
+										           ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''Invalid data in TY''
+										WHERE  TY NOT IN (''REDUCING'', ''AUTO GL ADJUSTMENT'', ''PMX'', ''PASSTHRU'',''CP TYPE'',''RANKING'',''OVERRIDE'',''AUTO GL ADJUSTMENT'', ''REGULAR'');';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate data -- TY Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- **************************************************** validate data -- distinct values per Rule Id
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										FROM (SELECT RUL_ID
+														FROM (SELECT RUL_ID, RUL_NM, RUL_DESC, TY, DQ_TY, SRC_SYS_CD, SRC_ENT_ID, CC_VAL_ID, PRTY
+																		FROM QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER 
+																		GROUP BY RUL_ID, RUL_NM, RUL_DESC, TY, DQ_TY, SRC_SYS_CD, SRC_ENT_ID, CC_VAL_ID, PRTY ) a
+														GROUP BY 1
+														HAVING COUNT(*) > 1) SRC
+										SET PRCS_FLG = ''E'',
+										           ERR_MSG = COALESCE(ERR_MSG,'' '') || '' - '' || ''Rule id attributes are not distinct''
+										 WHERE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER.RUL_ID = SRC.RUL_ID;';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+IF vActivity_Ct <> 0 THEN
+    SET vFailureMessage = 'One of the validation steps failed. Pls check RUL_UPLDR_INTER based on columns PRCS_FLG and ERR_MSG.';
+END IF;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate data -- distinct values per Rule Id Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- **************************************************** update  PRCS_FLG = V for valid records
+SET vSQL_Text ='UPDATE QSIT_APRA2_BRL_RRP_VW.RUL_UPLDR_INTER
+										SET PRCS_FLG = ''V''
+										WHERE  PRCS_FLG <> ''E'';';
+
+-- Log SQL Text 
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = '/*Generated SQL is:*/' || cLF ||  vSQL_Text;
+SET vDebugLvl = 5;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+EXECUTE IMMEDIATE vSQL_Text;
+SET vActivity_Ct = ACTIVITY_COUNT;
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Step validate data -- TY Completed - ' || TRIM(vActivity_Ct) || ' Rows Affected';
+SET vDebugLvl = 1;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+
+-- **************************************************** exiting when error
+
+IF vFailureMessage <> '' THEN
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Process - Failed';
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	SET oReturn_Code = 1;
+	SET oReturn_Message = vFailureMessage;
+    LEAVE MAIN;
+END IF;
+
+-- ****************************************************  exiting
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Completed';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+SET oReturn_Code = 0;
+SET oReturn_Message = vLogMsg;
+
+END MAIN;
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BSNSMD_UPLDR_VALIDATE_PSTMERGE
+-- =============================================
+-- Description: This Stored Procedure will call the other procedures for uploader activity.
+-- Change log
+--      [2015 02 04]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(
+OUT oReturn_Code SMALLINT, /* 0: Successful; Non-Zero: Error */
+OUT oReturn_Message VARCHAR(1000)
+)
+MAIN:
+BEGIN
+-- Declare variables
+DECLARE cLF CHAR(2) DEFAULT '0A'XC;
+DECLARE vCntr INTEGER DEFAULT 100;
+DECLARE vRecordCount INTEGER DEFAULT 100;
+DECLARE vActivity_Ct INTEGER DEFAULT -99;
+DECLARE vSQL_Text VARCHAR(10000) DEFAULT '';
+DECLARE vSQL_Code INTEGER;
+DECLARE vSQL_State VARCHAR(6);
+DECLARE vError_Text VARCHAR(256);
+DECLARE oSubReturn_Code SMALLINT;
+DECLARE oSubReturn_Message VARCHAR(1000);
+DECLARE vDebugLvl SMALLINT DEFAULT 5; -- 5 = verbose
+DECLARE vLogMsg VARCHAR(1000);
+DECLARE vLogSPName VARCHAR(255) DEFAULT 'BSNSMD_UPLDR_VALIDATE_PSTMERGE';
+
+
+-- Error Handler
+DECLARE EXIT HANDLER FOR SQLEXCEPTION
+BEGIN
+    SET vSQL_Code  = SQLCODE;
+    SET vSQL_State = SQLSTATE;
+    GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+    
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''SQLEXCEPTION'') - ' || 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+    SET oReturn_Code = 2;
+    SET oReturn_Message = vLogMsg;
+END;
+
+--UNCOMMENT IT WHEN GOOD DATA IS AVAILABLE
+/*-- If attribute name is not returned by above query, then throw an user error and stop the process
+DECLARE EXIT HANDLER FOR NOT FOUND
+BEGIN
+	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''NOT FOUND'') - ' || 'Failure at next step of the step which says ''' || vLogMsg || ''' because no rows were returned from the sql.';
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	SET oReturn_Code = 1;
+	SET oReturn_Message = vLogMsg;
+END;
+*/
+
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Started';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+-- **************************************************** validate data
+SELECT COUNT(*) INTO vRecordCount FROM QSIT_APRA2_BRL_RRP_VW.BSNSMD_VALIDATION_POSTMERGE WHERE FailedRecord_Cnt <> 0;
+
+IF vRecordCount <> 0 THEN
+    SET oReturn_Code = 1;
+    SET oReturn_Message = 'Failure: Pls query view QSIT_APRA2_BRL_RRP_VW.BSNSMD_VALIDATION for more details regarding which validation has failed';
+    LEAVE MAIN;
+END IF;
+
+-- ****************************************************  exiting
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Completed';
+SET vDebugLvl = 0;
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+SET oReturn_Code = 0;
+SET oReturn_Message = vLogMsg;
+
+END MAIN;
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
