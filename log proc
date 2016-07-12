@@ -1,0 +1,1597 @@
+--------------------------------------------------------------------------------
+
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BRL_CREATE_OUT_VIEWS
+-- =============================================
+-- Description: This procedure will create custom field enhancement view
+-- Change log
+--      [2016 04 07]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+
+(
+IN isrc_tblnm VARCHAR(40),
+IN iExec_Mode CHAR(1),
+OUT oReturn_Code SMALLINT, /* 0: Successful; Non-Zero: Error */
+OUT oReturn_Message VARCHAR(1000),
+OUT oSQL_Text VARCHAR(50000)
+) 
+ MAIN:
+BEGIN
+-- Declare variables
+DECLARE vSQL_Code INTEGER;
+DECLARE vSQL_State VARCHAR(6);
+DECLARE vError_Text VARCHAR(256);
+DECLARE vSQL_Text VARCHAR(10000);
+DECLARE vSQL_ONText VARCHAR(10000);
+DECLARE EOLStr VARCHAR(2) ;
+DECLARE oSubReturn_Code INTEGER;
+DECLARE oSubReturn_Message VARCHAR(1000);
+DECLARE vLoopCount INTEGER;
+DECLARE vComma CHAR(1);
+DECLARE vSRC_DB_NM VARCHAR(40);
+DECLARE vTRG_DB_NM VARCHAR(40);
+DECLARE vSRC_DB VARCHAR(40);
+DECLARE VSRC_TBNM VARCHAR(40);
+DECLARE VTGT_TBNM VARCHAR(40);
+
+--DECLARE return_code_create SMALLINT;
+
+-- Error Handler
+DECLARE EXIT HANDLER FOR SQLEXCEPTION
+BEGIN
+    SET vSQL_Code  = SQLCODE;
+    SET vSQL_State = SQLSTATE;
+    GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+    SET oReturn_Code = 2;
+    SET oReturn_Message = ' Call to SP failed. SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+END;
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG ('BRL_CREATE_OUT_VIEWS', 0, 'Started - isrc_tblnm '||isrc_tblnm, 0, oSubReturn_Code, oSubReturn_Message);
+
+SET EOLStr    = '
+';
+
+SET vSQL_Text = '';
+SET vSQL_ONText = '';
+SET vLoopCount = 0;
+
+SET vSRC_TBNM = UPPER(isrc_tblnm);
+SET vTGT_TBNM = 'OUT_'||vSRC_TBNM;
+
+
+-- Fetch Source DB Name
+SELECT PRMTR_VAL INTO :vSRC_DB_NM FROM QSIT_APRA2_BRL_RRP_VW.PRMTR_MSTR_S  WHERE PRMTR_NM = 'SRC_CNSUM';
+
+-- Fetch Target DB Name
+SELECT TRIM(PRMTR_VAL) INTO :vTRG_DB_NM FROM QSIT_APRA2_BRL_RRP_VW.PRMTR_MSTR_S WHERE PRMTR_NM = 'GEN_DB_NM' ;
+
+
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG ('BRL_CREATE_OUT_VIEWS', 100, 'Source DB Name =' || vSRC_DB_NM||'Target DB Name =  '|| vTRG_DB_NM||' Source Table Name = '|| vSRC_TBNM||' Target Table Name = ', 2, oSubReturn_Code, oSubReturn_Message);
+
+SET vSQL_Text = 'REPLACE VIEW '||vTRG_DB_NM||'.'||vTGT_TBNM||' AS LOCKING ROW FOR ACCESS'||EOLStr||'SELECT';
+
+L1: 
+FOR    CSR1 AS
+---Cursor to select the columns.
+
+SELECT TRIM(COLUMNNAME) AS COLNM
+FROM DBC.COLUMNS 
+WHERE Databasename = vSRC_DB_NM 
+AND TRIM(TABLENAME) = vSRC_TBNM
+AND COLNM NOT LIKE '%CSTM%FLD%'
+ORDER BY 1
+
+
+
+DO
+----------
+
+SET vLoopCount = vLoopCount + 1;
+
+IF vLoopCount = 1 THEN
+    SET vComma = '';
+ELSE 
+    SET vComma = ',';
+END IF;
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG ('BRL_CREATE_OUT_VIEWS', 200, 'In looop L1 CSR1.COLUMNNAME '|| CSR1.COLNM,3, oSubReturn_Code, oSubReturn_Message);
+
+--SET vSQL_Text = vSQL_Text || EOLStr||CSR1.COLNM||vComma;
+SET vSQL_Text = vSQL_Text || EOLStr||vComma||CSR1.COLNM;
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG ('BRL_CREATE_OUT_VIEWS', 300, 'vSQL_Text '|| vSQL_Text, 3, oSubReturn_Code, oSubReturn_Message);    
+
+----------
+END FOR    L1;
+
+L2: 
+FOR    CSR2 AS
+-- CURSOR TO SELECT THE CASE STATEMENTS
+
+SELECT
+GEN_COL
+FROM
+(SELECT
+Col_Map_Tgt_Col,
+OREPLACE (Col_Map_Tgt_Col,'_MDID',' ') AS Col_Map_Tgt_Col_1,
+OTRANSLATE (Col_Map_Fmt,'!@#$/%^&*().-',' ') X, -- to remove the junk characters 
+OREPLACE (X,' ','_') COL_MAP_VAL,
+    'CASE  WHEN ' AS A,
+    Col_Map_Tgt_Col AS B,
+    '= ' AS C,
+    Col_Map_Fmt AS D,
+    ' THEN ' AS E,
+    Col_Map_Tgt_Col_1 AS F,
+    ' ELSE  NULL  END' AS G,
+    ' AS ' AS H,
+    COL_MAP_VAL AS I,
+    '('||A||B||C||''''||D||''''||E||F||G||')'||H||I AS GEN_COL
+	FROM
+(SELECT
+	DISTINCT Col_Map_Fmt,
+    Col_Map_Tgt_Col  
+    FROM QSIT_APRA2_BRL_RRP_VW.CLMD_COLUMN_MAPPING 
+    WHERE COL_MAP_TYPE = 'STATICVAL'
+    AND Col_Map_Tgt_Col LIKE '%CSTM%FLD%MDID%'
+	AND Col_Map_Fmt <> ' ' 
+	AND Col_Map_Tgt_Tbl = isrc_tblnm
+	) Tab) Tab1
+ORDER BY COL_MAP_VAL
+DO
+----------
+
+SET vLoopCount = vLoopCount + 1;
+
+IF vLoopCount = 1 THEN
+    SET vComma = '';
+ELSE 
+    SET vComma = ',';
+END IF;
+
+--CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG ('BRL_CREATE_OUT_VIEWS', 200, 'In looop L2 CSR2.COLUMNNAME '|| CSR2.GEN_COL,3, oSubReturn_Code, oSubReturn_Message);
+
+--SET vSQL_Text = vSQL_Text || EOLStr||CSR2.GEN_COL||vComma;
+SET vSQL_Text = vSQL_Text || EOLStr||vComma||CSR2.GEN_COL;
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG ('BRL_CREATE_OUT_VIEWS', 400, 'vSQL_Text '|| vSQL_Text, 3, oSubReturn_Code, oSubReturn_Message);    
+
+----------
+END FOR    L2;
+
+SET vSQL_Text = vSQL_Text||EOLStr||'FROM '||vSRC_DB_NM||'.'||vSRC_TBNM||EOLStr||';';
+SET oSQL_Text = vSQL_Text;
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG ('BRL_CREATE_OUT_VIEWS', 500, 'vSQL_Text '|| vSQL_Text, 3, oSubReturn_Code, oSubReturn_Message);    
+
+SET oReturn_Code = 0;
+SET oReturn_Message = 'Successfully Completed ';
+
+CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG ('BRL_CREATE_OUT_VIEWS', 600, 'Ended SP - isrc_tblnm '||vSRC_TBNM || 'oSQL_Text:'||oSQL_Text, 0, oSubReturn_Code, oSubReturn_Message);
+
+IF (oSubReturn_Code =0)
+THEN
+
+---To run the SQL generated.	
+	IF iExec_Mode = 'Y' THEN 
+			EXECUTE IMMEDIATE vSQL_Text;
+			SET oReturn_Code = 0;
+			SET oReturn_Message='Success - Executed the generated SQL. Please verify that View has been created.';
+			LEAVE MAIN;
+	END IF;
+	SET oReturn_Code = 0;
+	SET oReturn_Message='Success - Did not execute the generated SQL';
+	ELSE
+	SET oReturn_Code = 5;
+	SET oReturn_Message= 'SELECT Portion: ' || oSubReturn_Message;
+    END IF; 
+
+END MAIN;
+--------------------------------------------------------------------------------
+
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BRL_CSCDNG_DFLTS_MAP
+-- =============================================
+-- Description: This procedure populate the Cascading Prompts Mapping tables
+-- Change log
+--      [2016 06 23]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(
+ IN iExecution_Flag            CHAR(1),
+--
+-- Possible Values
+--   Y  Execute Transform View SQL. Capture SQL in V_SQL_Log.
+--   N  Do not Execute Transform View SQL. Capture SQL in V_SQL_Log.
+--
+--  Business Date is retrieved from vBRLVWDBName.T_APRA_RPT_PRD
+--
+ OUT oReturn_Code              SMALLINT,             /* 0: Successful; 1: Error */
+ OUT oReturn_Message           VARCHAR(1000)
+--
+-- Run Time Format:
+--
+-- Example CALL PROCEDURE syntax
+--      Example 1. Execution Flag = Y
+-- CALL QSIT_APRA2_BRL_RRP_PGM.BRL_CSCDNG_DFLTS_MAP ('Y', oReturn, oReturn_Message);
+--      Example 2. Execution Flag = N
+-- CALL QSIT_APRA2_BRL_RRP_PGM.BRL_CSCDNG_DFLTS_MAP ('N', oReturn, oReturn_Message);
+--
+)
+MAIN:
+BEGIN
+--
+---------------------------------------------------------------------------------------------
+-- Variables declaration
+---------------------------------------------------------------------------------------------       
+--
+-- Declare Constants
+--
+DECLARE vBRLStoredProcDBName        VARCHAR(128) DEFAULT 'QSIT_APRA2_BRL_RRP_PGM';
+DECLARE vBRLWorkDBName              VARCHAR(128) DEFAULT 'QSIT_APRA2_BRL_RRP_WK';
+DECLARE vBRLVWDBName                VARCHAR(128) DEFAULT 'QSIT_APRA2_BRL_RRP_VW';
+DECLARE vBRLGENVWDBName             VARCHAR(128) DEFAULT 'QSIT_APRA2_BRL_RRP_GEN_VW';
+DECLARE vBRLTDBName                 VARCHAR(128) DEFAULT 'QSIT_APRA2_BRL_RRP_T';
+DECLARE vCNSUMVWDBName              VARCHAR(128) DEFAULT 'QSIT_APRA2_CNSUM_RRP_VW';
+DECLARE vCNSUMTDBName               VARCHAR(128) DEFAULT 'QSIT_APRA2_CNSUM_RRP_T';
+DECLARE vStoredProcName             VARCHAR(128) DEFAULT 'BRL_CSCDNG_DFLTS_MAP';
+DECLARE cLF                         CHAR(2) DEFAULT '0A'XC;
+--
+--
+-- Declare variables
+--
+DECLARE vStepNbr                    SMALLINT DEFAULT 0;
+DECLARE vSQLStep                    INTEGER DEFAULT 1;
+DECLARE vExecute_Flag               CHAR(1) DEFAULT 'N';
+DECLARE vBssns_Date		            VARCHAR(10);
+DECLARE vSQL_Text                   VARCHAR(16384) DEFAULT '';
+DECLARE oSubReturn_Code             SMALLINT;
+DECLARE oSubReturn_Message          VARCHAR(1000);
+--
+-- Declare Error Handler variables
+--
+DECLARE vSQL_Code                   INTEGER;
+DECLARE vSQL_State                  VARCHAR(6) DEFAULT ''XC;
+DECLARE vError_Text                 VARCHAR(256);
+--
+-- Error Handler
+--
+	DECLARE EXIT HANDLER FOR SQLEXCEPTION
+	BEGIN
+--
+-- Preserve Diagnostic Codes from errored Statement
+--
+		SET vSQL_Code  = SQLCODE;
+		SET vSQL_State = SQLSTATE;
+		GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+		SET oReturn_Code = 1;
+		SET oReturn_Message = 'Stored Procedure = '||vStoredProcName||', Step Nbr = '||TRIM(vStepNbr)||cLF||'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	END
+	;
+--
+-- Validate Input Parameters
+--
+    IF iExecution_Flag NOT IN ('Y', 'N') THEN
+        SET vExecute_Flag = 'N';
+    ELSE
+        SET vExecute_Flag = iExecution_Flag;
+    END IF;
+--
+-- Get Business Date
+--  Get latest END_TS just in case
+--
+    SET vStepNbr = 1;
+    BEGIN
+        DECLARE C1 CURSOR FOR S1;
+        SET vSQL_Text = 'SELECT CAST((END_TS (FORMAT ''YYYY-MM-DD'')) AS CHAR(10)) FROM ' || vBRLVWDBName || '.T_APRA_RPT_PRD QUALIFY ROW_NUMBER() OVER (ORDER BY END_TS DESC) = 1';
+        PREPARE S1 FROM vSQL_Text;
+        OPEN C1;
+        FETCH C1 INTO vBssns_Date;
+        CLOSE C1;
+    END
+    ;
+--
+-- Truncate the V_SQL_Log tables in BRL for the Business Date
+--
+    SET vSQL_Text = 'DELETE FROM '|| vBRLVWDBName || '.V_SQL_Log WHERE SP_Name = ''' || vStoredProcName || ''' AND Bssns_Date = DATE ''' || vBssns_Date || ''';';
+    EXECUTE IMMEDIATE vSQL_Text;
+--
+-- Populate the L0624 Entity tree BRL work table
+--
+    SET vStepNbr = 10;
+    SET vSQL_Text = 'DELETE FROM '|| vBRLWorkDBName || '.SR_L0624_ENTITY;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_L0624_ENTITY', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO '|| vBRLWorkDBName || '.SR_L0624_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WITH RECURSIVE LEAF_HFM_ENTITIES'||cLF;
+    SET vSQL_Text = vSQL_Text || '( HFM_LEAF_ENTITY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  HFM_ROOT_PARENT_ENTITY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  HFM_IMM_PARENT_ENTITY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  HFM_ENTITY_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  IS_LEAF_FLAG,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  DEPTH)'||cLF;
+    SET vSQL_Text = vSQL_Text || '  AS'||cLF;
+    SET vSQL_Text = vSQL_Text || '('||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LABEL AS HFM_LEAF_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEFAULT_PARENT AS HFM_PARENT_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEFAULT_PARENT AS HFM_IMM_PARENT_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DESCRIPTIONS AS HFM_ENTITY_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CASE WHEN HFM_ISBASE = ''True'' THEN ''Y'' ELSE ''N'' END AS IS_LEAF_FLAG'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,0 AS DEPTH'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM ' || vCNSUMVWDBName ||'.SR_ENTITY_TREE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' WHERE DEFAULT_PARENT = ''L0624'''||cLF;
+    SET vSQL_Text = vSQL_Text || ' UNION ALL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     HFM.LABEL'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.HFM_ROOT_PARENT_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM.DEFAULT_PARENT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM.DESCRIPTIONS'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CASE WHEN HFM.HFM_ISBASE = ''True'' THEN ''Y'' ELSE ''N'' END AS IS_LEAF_FLAG'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.DEPTH + 1'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM LEAF_HFM_ENTITIES A'||cLF;
+    SET vSQL_Text = vSQL_Text || ' INNER JOIN ' || vCNSUMVWDBName ||'.SR_ENTITY_TREE HFM'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ON A.HFM_LEAF_ENTITY = HFM.DEFAULT_PARENT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' WHERE A.DEPTH <= 25 AND A.IS_LEAF_FLAG = ''N'''||cLF;
+    SET vSQL_Text = vSQL_Text || ')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    HFM_LEAF_ENTITY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    HFM_ROOT_PARENT_ENTITY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    HFM_IMM_PARENT_ENTITY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    HFM_ENTITY_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    IS_LEAF_FLAG,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    DEPTH'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM LEAF_HFM_ENTITIES'||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_L0624_ENTITY', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the L0624 Entity leaf nodes BRL work table
+--
+    SET vStepNbr = 11;
+    SET vSQL_Text = 'DELETE FROM '|| vBRLWorkDBName || '.SR_L0624_LEAFS;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_L0624_LEAFS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO '|| vBRLWorkDBName || '.SR_L0624_LEAFS'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WITH RECURSIVE LEAF_HFM_ENTITIES'||cLF;
+    SET vSQL_Text = vSQL_Text || '( LCD_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  NODE_LEGAL_ENT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LCD_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  IS_LEAF,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  DEPTH)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AS'||cLF;
+    SET vSQL_Text = vSQL_Text || '('||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     HFM_LEAF_ENTITY AS LCD_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM_IMM_PARENT_ENTITY AS NODE_LEGAL_ENT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM_ENTITY_DESC AS LCD_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,IS_LEAF_FLAG AS IS_LEAF'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,1 AS DEPTH'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM '|| vBRLWorkDBName || '.SR_L0624_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' WHERE IS_LEAF_FLAG = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || ' UNION ALL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     A.LCD_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM.HFM_IMM_PARENT_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.LCD_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.IS_LEAF'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.DEPTH + 1'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM LEAF_HFM_ENTITIES A'||cLF;
+    SET vSQL_Text = vSQL_Text || ' INNER JOIN '|| vBRLWorkDBName || '.SR_L0624_ENTITY HFM'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ON A.NODE_LEGAL_ENT_CD = HFM.HFM_LEAF_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' WHERE A.DEPTH <= 25'||cLF;
+    SET vSQL_Text = vSQL_Text || ')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT '||cLF;
+    SET vSQL_Text = vSQL_Text || '  LCD_CD, '||cLF;
+    SET vSQL_Text = vSQL_Text || '  NODE_LEGAL_ENT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LCD_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  IS_LEAF,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  DEPTH'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM LEAF_HFM_ENTITIES'||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_L0624_LEAFS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the Balance Sheet Account tree BRL work table
+--
+    SET vStepNbr = 12;
+    SET vSQL_Text = 'DELETE FROM '|| vBRLWorkDBName || '.SR_BALSHEET_ACCNT;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_BALSHEET_ACCNT', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO '|| vBRLWorkDBName || '.SR_BALSHEET_ACCNT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WITH RECURSIVE LEAF_HFM_ACCOUNTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '( HFM_LEAF_ACCOUNT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  HFM_ROOT_PARENT_ACCOUNT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  HFM_IMM_PARENT_ACCOUNT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  HFM_ACCOUNT_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  IS_LEAF_FLAG,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  DEPTH)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AS'||cLF;
+    SET vSQL_Text = vSQL_Text || '('||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     LABEL AS HFM_LEAF_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,DEFAULT_PARENT AS HFM_PARENT_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,DEFAULT_PARENT AS HFM_IMM_PARENT_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,DESCRIPTIONS AS HFM_ACCOUNT_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CASE WHEN HFM_ISBASE = ''True'' THEN ''Y'' ELSE ''N'' END AS IS_LEAF_FLAG'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,0 AS DEPTH'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM ' || vCNSUMVWDBName || '.SR_ACCOUNT_TREE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' WHERE DEFAULT_PARENT = ''BALSHEET'''||cLF;
+    SET vSQL_Text = vSQL_Text || ' UNION ALL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     HFM.LABEL'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.HFM_ROOT_PARENT_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM.DEFAULT_PARENT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM.DESCRIPTIONS'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CASE WHEN HFM.HFM_ISBASE = ''True'' THEN ''Y'' ELSE ''N'' END AS IS_LEAF_FLAG'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.DEPTH + 1'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM LEAF_HFM_ACCOUNTS A'||cLF;
+    SET vSQL_Text = vSQL_Text || ' INNER JOIN ' || vCNSUMVWDBName || '.SR_ACCOUNT_TREE HFM'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ON A.HFM_LEAF_ACCOUNT = HFM.DEFAULT_PARENT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE A.DEPTH <= 25 AND A.IS_LEAF_FLAG = ''N'''||cLF;
+    SET vSQL_Text = vSQL_Text || ')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    HFM_LEAF_ACCOUNT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    HFM_ROOT_PARENT_ACCOUNT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    HFM_IMM_PARENT_ACCOUNT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    HFM_ACCOUNT_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    IS_LEAF_FLAG,'||cLF;
+    SET vSQL_Text = vSQL_Text || '    DEPTH'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM LEAF_HFM_ACCOUNTS'||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_BALSHEET_ACCNT', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the Balance Sheet Account leaf nodes BRL work table
+-- Includes a row for each leaf mapped to itself with at depth of 0
+--
+    SET vStepNbr = 13;
+    SET vSQL_Text = 'DELETE FROM '|| vBRLWorkDBName || '.SR_BALSHEET_LEAFS;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_BALSHEET_LEAFS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO '|| vBRLWorkDBName || '.SR_BALSHEET_LEAFS'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WITH RECURSIVE LEAF_HFM_ACCOUNTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '( LEAF_ACCT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  NODE_ACCT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LEAF_ACCT_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  IS_LEAF,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  DEPTH)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AS'||cLF;
+    SET vSQL_Text = vSQL_Text || '('||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     HFM_LEAF_ACCOUNT AS LEAF_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM_IMM_PARENT_ACCOUNT AS NODE_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM_ACCOUNT_DESC AS LEAF_ACCT_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,IS_LEAF_FLAG AS IS_LEAF'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,1 AS DEPTH'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM '|| vBRLWorkDBName || '.SR_BALSHEET_ACCNT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' WHERE IS_LEAF_FLAG = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || ' UNION ALL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     A.LEAF_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,HFM.HFM_IMM_PARENT_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.LEAF_ACCT_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.IS_LEAF'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,A.DEPTH + 1'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM LEAF_HFM_ACCOUNTS A'||cLF;
+    SET vSQL_Text = vSQL_Text || ' INNER JOIN '|| vBRLWorkDBName || '.SR_BALSHEET_ACCNT HFM'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ON A.NODE_ACCT_CD = HFM.HFM_LEAF_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' WHERE A.DEPTH <= 25'||cLF;
+    SET vSQL_Text = vSQL_Text || ')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LEAF_ACCT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  NODE_ACCT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LEAF_ACCT_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  IS_LEAF,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  DEPTH'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM LEAF_HFM_ACCOUNTS'||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_BALSHEET_LEAFS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+  
+    SET vStepNbr = 14;
+    SET vSQL_Text = 'INSERT INTO '|| vBRLWorkDBName || '.SR_BALSHEET_LEAFS'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LEAF_ACCT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LEAF_ACCT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LEAF_ACCT_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  IS_LEAF,'||cLF;
+    SET vSQL_Text = vSQL_Text || '  0'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM '|| vBRLWorkDBName || '.SR_BALSHEET_LEAFS'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE DEPTH = 1'||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_BALSHEET_LEAFS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the Interface SR GL Balance table in BRL layer
+--
+    SET vStepNbr = 20;
+    SET vSQL_Text = 'DELETE FROM '|| vBRLVWDBName || '.INFRC_SR_GL_BAL;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'INFRC_SR_GL_BAL', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO ' || vBRLVWDBName || '.INFRC_SR_GL_BAL'||cLF;
+    SET vSQL_Text = vSQL_Text || '( ENT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,HFM_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,HFM_LCD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_BUS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_AFFILIATE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_BSBCC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_PRJ_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TRN_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TRN_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,LCY_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,LCY_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,RPT_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,RPT_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || ')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ''L0624'' AS ENT'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.HFM_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.HFM_LCD'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.BUSINESS_UNIT AS PSGL_BUS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.ACCOUNT_1 AS PSGL_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.PRODUCT AS PSGL_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.AFFILIATE AS PSGL_AFFILIATE'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.DEPTID AS PSGL_BSBCC'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.PROJECT_ID AS PSGL_PRJ_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.CURRENCY_CD AS TRN_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || ', SUM(gl.POSTED_TRAN_TOTAL) AS TRN_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.BASE_CURRENCY AS LCY_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || ', SUM(gl.POSTED_BASE_TOTAL) AS LCY_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || ', gl.BASE_CURRENCY AS RPT_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || ', SUM(gl.POSTED_BASE_TOTAL) AS RPT_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vBRLVWDBName || '.SR_GL_BAL gl'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vBRLWorkDBName || '.SR_L0624_ENTITY ent'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON gl.HFM_LCD = ent.HFM_LEAF_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vBRLWorkDBName || '.SR_BALSHEET_ACCNT bsh'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON gl.HFM_ACCT_CD = bsh.HFM_LEAF_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE ent.IS_LEAF_FLAG = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || '  AND bsh.IS_LEAF_FLAG = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14'||cLF;
+    SET vSQL_Text = vSQL_Text || 'HAVING RPT_AMT <> 0'||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'INFRC_SR_GL_BAL', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the Interface SR GL Account Association table in BRL layer
+--
+    SET vStepNbr = 21;
+    SET vSQL_Text = 'DELETE FROM '|| vBRLVWDBName || '.INFRC_SR_GL_ACCT_ASSOC;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'INFRC_SR_GL_ACCT_ASSOC', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO ' ||vBRLVWDBName || '.INFRC_SR_GL_ACCT_ASSOC'||cLF;
+    SET vSQL_Text = vSQL_Text || '('||cLF;
+    SET vSQL_Text = vSQL_Text || '   ENT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,SRC_SYS_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,AR_UNQ_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,BASE_TABLE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,VALTN_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,SR_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,BSB_CC'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,SR_LCD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_AFFIL'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_PRJ_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_BUS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,LCL_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,BAL_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || ')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ''L0624'''||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.SRC_SYS_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.AR_UNQ_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.BASE_TABLE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.VALTN_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.SR_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.BSB_CC'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.SR_LCD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.GL_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.GL_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.GL_AFFIL'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.GL_PRJ_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.GL_BUS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.LCL_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,DT.BAL_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ('||cLF;
+    SET vSQL_Text = vSQL_Text || '   SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     sbh.SRC_SYS_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.AR_UNQ_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.USR_FLD_1 AS BASE_TABLE'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CASE WHEN sbh.VALTN_TY IS NULL OR sbh.VALTN_TY = '''' THEN ''Gross Balance'' ELSE sbh.VALTN_TY END AS VALTN_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,COALESCE(amap.SR_ACCT, ''Unknown HFM Account'') AS SR_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.DEPT_ID AS BSB_CC'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,COALESCE(lmap.SR_LCD, ''Unknown HFM LCD'') AS SR_LCD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.GL_AC AS GL_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.GL_PRD AS GL_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.AFFIL AS GL_AFFIL'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.PROJ_ID AS GL_PRJ_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.BSNS_UNT AS GL_BUS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.CUR_CD AS LCL_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,sbh.BAL_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   FROM ' || vCNSUMVWDBName || '.SRC_ACC_BAL_HIST sbh'||cLF;
+    SET vSQL_Text = vSQL_Text || '   LEFT OUTER JOIN ' || vCNSUMVWDBName || '.SR_GL_ACCT_MAP amap'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ON sbh.GL_AC = amap.GL_ACCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   LEFT OUTER JOIN ' || vCNSUMVWDBName || '.SR_GL_DEPT_LCD_MAP lmap'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ON sbh.BSNS_UNT = lmap.GL_BSSNS_UNT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   AND sbh.DEPT_ID = lmap.GL_DEPTID'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ) DT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vBRLWorkDBName || '.SR_L0624_ENTITY ent'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON DT.SR_LCD = ent.HFM_LEAF_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vBRLWorkDBName || '.SR_BALSHEET_ACCNT bsh'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON DT.SR_ACCT_CD = bsh.HFM_LEAF_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE ent.IS_LEAF_FLAG = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || '  AND bsh.IS_LEAF_FLAG = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'INFRC_SR_GL_ACCT_ASSOC', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the Interface SR Balance table in BRL layer
+--
+    SET vStepNbr = 22;
+    SET vSQL_Text = 'DELETE FROM ' || vBRLVWDBName || '.INFRC_SR_BAL;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'INFRC_SR_BAL', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO '|| vBRLVWDBName || '.INFRC_SR_BAL'||cLF;
+    SET vSQL_Text = vSQL_Text || '(  ENT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,HFM_YEAR_1'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,HFM_MONTH_1'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,HFM_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,HFM_LCD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,TRN_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,TRN_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,LCY_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,LCY_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,RPT_CUR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,RPT_AMT'||cLF;
+    SET vSQL_Text = vSQL_Text || ')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '     ''L0624''                        -- Business Rules to be determined'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,tcl.Year_1'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,tcl.Month_1'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,tcl.ACCOUNT_1'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,tcl.ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,NULL'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,NULL'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CASE WHEN MIN(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     = MAX(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     THEN MIN(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     WHEN MIN(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END) = ''AUD'''||cLF;
+    SET vSQL_Text = vSQL_Text || '     THEN MAX(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     ELSE MIN(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     END'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,SUM((CASE WHEN UPPER(act.ACCOUNTTYPE) IN (''ASSET'', ''EXPENSE'') THEN 1000 ELSE -1000 END) * CAST(tcl.Amount AS DECIMAL(36,8)))'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CASE WHEN MIN(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     = MAX(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     THEN MIN(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     WHEN MIN(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END) = ''AUD'''||cLF;
+    SET vSQL_Text = vSQL_Text || '     THEN MAX(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     ELSE MIN(CASE WHEN tcl.Currency LIKE ''% Adjs'' THEN SUBSTRING(tcl.Currency FROM 1 FOR POSITION('' Adjs'' IN tcl.Currency)-1) ELSE tcl.Currency END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '     END'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,SUM((CASE WHEN tcl.Currency IN (''AUD'', ''AUD Adjs'') THEN (CASE WHEN act.ACCOUNTTYPE IN (''ASSET'', ''EXPENSE'') THEN 1000 ELSE -1000 END) ELSE 0 END) * CAST(tcl.Amount AS DECIMAL(36,8)))'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vCNSUMVWDBName || '.HFMZZ_EA_TCL tcl'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vCNSUMVWDBName || '.SR_ACCOUNT_TREE act'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON tcl.ACCOUNT_1 = act.LABEL'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vBRLWorkDBName || '.SR_BALSHEET_ACCNT acth'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON tcl.ACCOUNT_1 = acth.HFM_LEAF_ACCOUNT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vBRLWorkDBName || '.SR_L0624_ENTITY lcdh'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON tcl.ENTITY = lcdh.HFM_LEAF_ENTITY'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vCNSUMVWDBName || '.SR_CUSTOM1_HIER C1'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON tcl.Custom1 = C1.LEAF_CUSTOM1'||cLF;
+    SET vSQL_Text = vSQL_Text || 'OR tcl.Custom1 = ''STAT_ADJ'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN ' || vCNSUMVWDBName || '.SR_CUSTOM3_HIER C3'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON tcl.Custom3 = C3.LEAF_CUSTOM3'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE tcl.Scenario = ''ACTUAL'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND tcl.Custom2 = ''EOP'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND tcl.Custom4 = ''[None]'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND tcl.Periodicity = ''YTD'''||cLF;
+    SET vSQL_Text = vSQL_Text || '-- AND tcl.Currency IN (''AUD'', ''AUD Adjs'')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND acth.IS_LEAF_FLAG = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND lcdh.IS_LEAF_FLAG = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND C1.NODE_CUSTOM1 = ''MGMT'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND tcl.Custom1 <> ''MGMT_ADJ'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND C3.NODE_CUSTOM3 = ''TB_TOT'''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND tcl.Year_1 = (SELECT CASE WHEN month_of_year >= 10 THEN year_of_calendar+1 ELSE year_of_calendar END FROM Sys_Calendar.CALENDAR WHERE calendar_date = DATE ''' || vBssns_Date || ''')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND tcl.Month_1 = (SELECT b.SR_MTH FROM Sys_Calendar.CALENDAR a INNER JOIN ' || vCNSUMVWDBName || '.SR_MTH b ON a.month_of_year = b.MTH WHERE calendar_date = DATE ''' || vBssns_Date || ''')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'GROUP BY 1,2,3,4,5'||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'INFRC_SR_BAL', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the HFM PSGL EXPLO Ledger work table in BRL Layer
+--
+    SET vStepNbr = 23;
+    SET vSQL_Text = 'DELETE FROM ' || vBRLWorkDBName || '.SR_GL_EXPLO_SUBLEDGER;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_GL_EXPLO_SUBLEDGER', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO ' || vBRLWorkDBName || '.SR_GL_EXPLO_SUBLEDGER'||cLF;
+    SET vSQL_Text = vSQL_Text || '( HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_BUSINESS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_AFFILIATE_CODE)'||cLF;
+-- PSGL Entries from INFRC_SR_GL_BAL
+    SET vSQL_Text = vSQL_Text || 'SELECT DISTINCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   HFM_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,PSGL_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,PSGL_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,PSGL_BUS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,PSGL_AFFILIATE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vBRLVWDBName || '.INFRC_SR_GL_BAL'||cLF;
+-- HFM Entries from INFRC_SR_BAL
+    SET vSQL_Text = vSQL_Text || 'UNION'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT DISTINCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   HFM_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,CAST(NULL AS VARCHAR(10))'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,CAST(NULL AS VARCHAR(10))'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,CAST(NULL AS VARCHAR(10))'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,CAST(NULL AS VARCHAR(10))'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vBRLVWDBName || '.INFRC_SR_BAL'||cLF;
+-- EXPLO Entries from INFRC_SR_GL_ACCT_ASSOC
+    SET vSQL_Text = vSQL_Text || 'UNION'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT DISTINCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   SR_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_BUS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,GL_AFFIL'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vBRLVWDBName || '.INFRC_SR_GL_ACCT_ASSOC;'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_GL_EXPLO_SUBLEDGER', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Start of the Cascading Defaults process
+--
+-- Populate the HFM Leaf Defaults work table in BRL Layer
+--
+    SET vStepNbr = 24;
+    SET vSQL_Text = 'DELETE FROM ' || vBRLWorkDBName || '.SR_LEAF_DEFAULTS;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_LEAF_DEFAULTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO '|| vBRLWorkDBName || '.SR_LEAF_DEFAULTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '( HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,AMOUNT_FIELD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRODUCT_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REGULATORY_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_CDE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_DC_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_RESECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ASSET_BACKED'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRD_REPO_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SETT_CREDIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_CONVERTIBLE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_TANGIBLE_ASSETS'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_BS_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_NEAR_FAR_INDIC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ENTRY_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_PURPOSE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CTY_RESIDENCE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_REVOLVING_FAC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_CPTY_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CDE_CONSOLIDATION_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_COLLATERAL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_PORTFOLIO'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_INTEREST_RATE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CCY_ISO_CURRENCY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_REMAINING_BKT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_ORIGINAL_BKT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CTY_ISSUE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_LISTED'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SUBORDINATION)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  LEAF_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BAL_CLASS'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_DF_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REGULATORY_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_CDE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_DC_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_RESECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ASSET_BACKED'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRD_REPO_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SETT_CREDIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_CONVERTIBLE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_TANGIBLE_ASSETS'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_BS_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_NEAR_FAR_INDIC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ENTRY_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_PURPOSE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CTY_RESIDENCE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_REVOLVING_FAC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_CPTY_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CDE_CONSOLIDATION_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_COLLATERAL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_PORTFOLIO'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_INTEREST_RATE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CCY_ISO_CURRENCY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_REMAINING_BKT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_ORIGINAL_BKT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CTY_ISSUE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_LISTED'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SUBORDINATION '||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ( SELECT ROW_NUMBER() OVER (PARTITION BY B.LEAF_ACCT_CD ORDER BY CASE WHEN B.LEAF_ACCT_CD = A.HFM_ACCOUNT_CODE THEN 1 ELSE 9 END, B.DEPTH) AS ROW_NR,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              B.LEAF_ACCT_CD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.BAL_CLASS,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_DF_PRODUCT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.REGULATORY_PRODUCT_CODE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.BSS_ITEM_CDE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.BSS_ITEM_DESC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_DC_INDICATOR,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_SECURITISATION,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_RESECURITISATION,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_ASSET_BACKED,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.PRD_REPO_PRODUCT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_SETT_CREDIT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_CONVERTIBLE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_TANGIBLE_ASSETS,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_BS_INDICATOR,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.MAT_INDICATOR,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_NEAR_FAR_INDIC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_ENTRY_TYPE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_PURPOSE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.CTY_RESIDENCE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_REVOLVING_FAC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_CPTY_TYPE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.CDE_CONSOLIDATION_CODE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_COLLATERAL,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_PORTFOLIO,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_INTEREST_RATE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.CCY_ISO_CURRENCY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.MAT_REMAINING_BKT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.MAT_ORIGINAL_BKT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.CTY_ISSUE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_LISTED,'||cLF;
+    SET vSQL_Text = vSQL_Text || '              A.TYP_SUBORDINATION'||cLF;
+    SET vSQL_Text = vSQL_Text || '      FROM ' || vCNSUMVWDBName || '.MAPRAAU_HFM_PSGL_DEFAULTS A'||cLF;
+    SET vSQL_Text = vSQL_Text || '      INNER JOIN '|| vBRLWorkDBName || '.SR_BALSHEET_LEAFS B'||cLF;
+    SET vSQL_Text = vSQL_Text || '      ON A.HFM_ACCOUNT_CODE = B.NODE_ACCT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || '      WHERE A.PSGL_ACCOUNT_CODE = '''''||cLF;
+    SET vSQL_Text = vSQL_Text || '     ) C'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE C.ROW_NR = 1;'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_LEAF_DEFAULTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the PSGL Leaf Defaults work table in BRL Layer
+--
+    SET vStepNbr = 25;
+    SET vSQL_Text = 'DELETE FROM ' || vBRLWorkDBName || '.SR_GL_LEAF_DEFAULTS;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_GL_LEAF_DEFAULTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT '|| vBRLWorkDBName || '.SR_GL_LEAF_DEFAULTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '( HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_AFFILIATE_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,AMOUNT_FIELD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRODUCT_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REGULATORY_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_CDE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_DC_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_RESECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ASSET_BACKED'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRD_REPO_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SETT_CREDIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_CONVERTIBLE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_TANGIBLE_ASSETS'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_BS_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_NEAR_FAR_INDIC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ENTRY_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_PURPOSE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CTY_RESIDENCE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_REVOLVING_FAC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_CPTY_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CDE_CONSOLIDATION_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_COLLATERAL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_PORTFOLIO'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_INTEREST_RATE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CCY_ISO_CURRENCY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_REMAINING_BKT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_ORIGINAL_BKT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CTY_ISSUE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_LISTED'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SUBORDINATION)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT A.SR_ACCT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       A.GL_ACCT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       CAST(NULL AS VARCHAR(50)),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       CAST(NULL AS VARCHAR(50)),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.BAL_CLASS, B.AMOUNT_FIELD),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_DF_PRODUCT, B.PRODUCT_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.REGULATORY_PRODUCT_CODE, B.REGULATORY_PRODUCT_CODE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.BSS_ITEM_CDE, B.BSS_ITEM_CDE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.BSS_ITEM_DESC, B.BSS_ITEM_DESC),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_DC_INDICATOR, B.TYP_DC_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_SECURITISATION, B.TYP_SECURITISATION),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_RESECURITISATION, B.TYP_RESECURITISATION),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_ASSET_BACKED, B.TYP_ASSET_BACKED),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.PRD_REPO_PRODUCT, B.PRD_REPO_PRODUCT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_SETT_CREDIT, B.TYP_SETT_CREDIT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_CONVERTIBLE, B.TYP_CONVERTIBLE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_TANGIBLE_ASSETS, B.TYP_TANGIBLE_ASSETS),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_BS_INDICATOR, B.TYP_BS_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.MAT_INDICATOR, B.MAT_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_NEAR_FAR_INDIC, B.TYP_NEAR_FAR_INDIC),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_ENTRY_TYPE, B.TYP_ENTRY_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_PURPOSE, B.TYP_PURPOSE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.CTY_RESIDENCE, B.CTY_RESIDENCE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_REVOLVING_FAC, B.TYP_REVOLVING_FAC),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_CPTY_TYPE, B.TYP_CPTY_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.CDE_CONSOLIDATION_CODE, B.CDE_CONSOLIDATION_CODE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_COLLATERAL, B.TYP_COLLATERAL),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_PORTFOLIO, B.TYP_PORTFOLIO),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_INTEREST_RATE, B.TYP_INTEREST_RATE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.CCY_ISO_CURRENCY, B.CCY_ISO_CURRENCY),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.MAT_REMAINING_BKT, B.MAT_REMAINING_BKT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.MAT_ORIGINAL_BKT, B.MAT_ORIGINAL_BKT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.CTY_ISSUE, B.CTY_ISSUE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_LISTED, B.TYP_LISTED),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_SUBORDINATION, B.TYP_SUBORDINATION)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vCNSUMVWDBName || '.SR_GL_ACCT_MAP A'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN '|| vBRLWorkDBName || '.SR_LEAF_DEFAULTS B'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON A.SR_ACCT = B.HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN ' || vCNSUMVWDBName || '.MAPRAAU_HFM_PSGL_DEFAULTS C'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON A.GL_ACCT = C.PSGL_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND C.PSGL_PRODUCT_CODE = '''''||cLF;
+    SET vSQL_Text = vSQL_Text || 'UNION'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT A.SR_ACCT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       A.GL_ACCT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       C.PSGL_PRODUCT_CODE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       C.PSGL_AFFILIATE_CODE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.BAL_CLASS, B.AMOUNT_FIELD),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_DF_PRODUCT, B.PRODUCT_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.REGULATORY_PRODUCT_CODE, B.REGULATORY_PRODUCT_CODE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.BSS_ITEM_CDE, B.BSS_ITEM_CDE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.BSS_ITEM_DESC, B.BSS_ITEM_DESC),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_DC_INDICATOR, B.TYP_DC_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_SECURITISATION, B.TYP_SECURITISATION),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_RESECURITISATION, B.TYP_RESECURITISATION),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_ASSET_BACKED, B.TYP_ASSET_BACKED),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.PRD_REPO_PRODUCT, B.PRD_REPO_PRODUCT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_SETT_CREDIT, B.TYP_SETT_CREDIT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_CONVERTIBLE, B.TYP_CONVERTIBLE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_TANGIBLE_ASSETS, B.TYP_TANGIBLE_ASSETS),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_BS_INDICATOR, B.TYP_BS_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.MAT_INDICATOR, B.MAT_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_NEAR_FAR_INDIC, B.TYP_NEAR_FAR_INDIC),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_ENTRY_TYPE, B.TYP_ENTRY_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_PURPOSE, B.TYP_PURPOSE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.CTY_RESIDENCE, B.CTY_RESIDENCE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_REVOLVING_FAC, B.TYP_REVOLVING_FAC),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_CPTY_TYPE, B.TYP_CPTY_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.CDE_CONSOLIDATION_CODE, B.CDE_CONSOLIDATION_CODE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_COLLATERAL, B.TYP_COLLATERAL),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_PORTFOLIO, B.TYP_PORTFOLIO),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_INTEREST_RATE, B.TYP_INTEREST_RATE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.CCY_ISO_CURRENCY, B.CCY_ISO_CURRENCY),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.MAT_REMAINING_BKT, B.MAT_REMAINING_BKT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.MAT_ORIGINAL_BKT, B.MAT_ORIGINAL_BKT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.CTY_ISSUE, B.CTY_ISSUE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_LISTED, B.TYP_LISTED),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(C.TYP_SUBORDINATION, B.TYP_SUBORDINATION)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vCNSUMVWDBName || '.SR_GL_ACCT_MAP A'||cLF;
+    SET vSQL_Text = vSQL_Text || 'JOIN '|| vBRLWorkDBName || '.SR_LEAF_DEFAULTS B'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON A.SR_ACCT = B.HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN ' || vCNSUMVWDBName || '.MAPRAAU_HFM_PSGL_DEFAULTS C'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON A.GL_ACCT = C.PSGL_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE C.PSGL_PRODUCT_CODE <> '''';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_GL_LEAF_DEFAULTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the Interface HFM PSGL Map Defaults table in BRL layer
+--   Truncate records for current Business Date
+--
+    SET vStepNbr = 26;
+    SET vSQL_Text = 'DELETE FROM ' || vBRLVWDBName || '.SR_GL_MAP_DFLTS'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE BSNS_DT = DATE ''' || vBssns_Date || ''';';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'SR_GL_MAP_DFLTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO ' || vBRLVWDBName || '.SR_GL_MAP_DFLTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '( BSNS_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,SR_AC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,GL_AC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,GL_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,AFFIL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSNS_UNT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BAL_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_PRD_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REG_PRD_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_DC_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_SCRTZN'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_RESCRTIZ'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_ASSET_BKCD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_REPO_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_SETL_CR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_CONV'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_TNGBL_ASSET'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_BAL_SHEET'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_MTRTY_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_NEAR_FAR_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_ENTRY_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_PRPS'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,RES_CNRTY_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_RVLV_FCLT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_CNTRPRT_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_CNSLDT_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_COLLAT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_PORTF'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INT_RTE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CUR_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_RMN_BCKT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_ORGNL_BCKT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,ISS_CNTRY_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_LSTD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INRFC_SUBB'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,EFFV_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,EXPR_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,USR_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REG_BSS_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REG_BSS_DESC)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT DATE ''' || vBssns_Date || ''','||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(DB.HFM_ACCOUNT_CODE, ''''),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(DB.PSGL_ACCOUNT_CODE, ''''),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(DB.PSGL_PRODUCT_CODE, ''''),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(DB.PSGL_AFFILIATE_CODE, ''''),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(DB.PSGL_BUSINESS_UNIT, ''''),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.AMOUNT_FIELD, PSGL.AMOUNT_FIELD, HFM.AMOUNT_FIELD),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.PRODUCT_TYPE, PSGL.PRODUCT_TYPE, HFM.PRODUCT_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.REGULATORY_PRODUCT_CODE, PSGL.REGULATORY_PRODUCT_CODE, HFM.REGULATORY_PRODUCT_CODE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_DC_INDICATOR, PSGL.TYP_DC_INDICATOR, HFM.TYP_DC_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_SECURITISATION, PSGL.TYP_SECURITISATION, HFM.TYP_SECURITISATION),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_RESECURITISATION, PSGL.TYP_RESECURITISATION, HFM.TYP_RESECURITISATION),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_ASSET_BACKED, PSGL.TYP_ASSET_BACKED, HFM.TYP_ASSET_BACKED),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.PRD_REPO_PRODUCT, PSGL.PRD_REPO_PRODUCT, HFM.PRD_REPO_PRODUCT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_SETT_CREDIT, PSGL.TYP_SETT_CREDIT, HFM.TYP_SETT_CREDIT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_CONVERTIBLE, PSGL.TYP_CONVERTIBLE, HFM.TYP_CONVERTIBLE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_TANGIBLE_ASSETS, PSGL.TYP_TANGIBLE_ASSETS, HFM.TYP_TANGIBLE_ASSETS),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_BS_INDICATOR, PSGL.TYP_BS_INDICATOR, HFM.TYP_BS_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.MAT_INDICATOR, PSGL.MAT_INDICATOR, HFM.MAT_INDICATOR),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_NEAR_FAR_INDIC, PSGL.TYP_NEAR_FAR_INDIC, HFM.TYP_NEAR_FAR_INDIC),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_ENTRY_TYPE, PSGL.TYP_ENTRY_TYPE, HFM.TYP_ENTRY_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_PURPOSE, PSGL.TYP_PURPOSE, HFM.TYP_PURPOSE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(AFF.CTY_RESIDENCE, PRD.CTY_RESIDENCE, PSGL.CTY_RESIDENCE, HFM.CTY_RESIDENCE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_REVOLVING_FAC, PSGL.TYP_REVOLVING_FAC, HFM.TYP_REVOLVING_FAC),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(AFF.TYP_CPTY_TYPE, PRD.TYP_CPTY_TYPE, PSGL.TYP_CPTY_TYPE, HFM.TYP_CPTY_TYPE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(AFF.CDE_CONSOLIDATION_CODE, PRD.CDE_CONSOLIDATION_CODE, PSGL.CDE_CONSOLIDATION_CODE, HFM.CDE_CONSOLIDATION_CODE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_COLLATERAL, PSGL.TYP_COLLATERAL, HFM.TYP_COLLATERAL),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_PORTFOLIO, PSGL.TYP_PORTFOLIO, HFM.TYP_PORTFOLIO),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_INTEREST_RATE, PSGL.TYP_INTEREST_RATE, HFM.TYP_INTEREST_RATE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.CCY_ISO_CURRENCY, PSGL.CCY_ISO_CURRENCY, HFM.CCY_ISO_CURRENCY),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.MAT_REMAINING_BKT, PSGL.MAT_REMAINING_BKT, HFM.MAT_REMAINING_BKT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.MAT_ORIGINAL_BKT, PSGL.MAT_ORIGINAL_BKT, HFM.MAT_ORIGINAL_BKT),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.CTY_ISSUE, PSGL.CTY_ISSUE, HFM.CTY_ISSUE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_LISTED, PSGL.TYP_LISTED, HFM.TYP_LISTED),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.TYP_SUBORDINATION, PSGL.TYP_SUBORDINATION, HFM.TYP_SUBORDINATION),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       CURRENT_DATE,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       DATE ''9999-12-31'','||cLF;
+--    SET vSQL_Text = vSQL_Text || '       ''verweyt'','||cLF;
+    SET vSQL_Text = vSQL_Text || '       CASE WHEN AFF.AFFILIATE_CODE IS NOT NULL THEN'||cLF;
+    SET vSQL_Text = vSQL_Text || '           (CASE WHEN PRD.PSGL_ACCOUNT_CODE IS NOT NULL THEN ''PSGL PROD AND AFFIL OVRD MAP'''||cLF;
+    SET vSQL_Text = vSQL_Text || '                 WHEN PSGL.PSGL_ACCOUNT_CODE IS NOT NULL THEN ''PSGL ACCT AND AFFIL OVRD MAP'' ELSE ''HFM MAP AND AFFIL OVRD MAP'' END)'||cLF;
+    SET vSQL_Text = vSQL_Text || '            WHEN PRD.PSGL_ACCOUNT_CODE IS NOT NULL THEN ''PSGL PROD MAP'''||cLF;
+    SET vSQL_Text = vSQL_Text || '            WHEN PSGL.PSGL_ACCOUNT_CODE IS NOT NULL THEN ''PSGL ACCT MAP'''||cLF;
+    SET vSQL_Text = vSQL_Text || '            WHEN HFM.HFM_ACCOUNT_CODE IS NOT NULL THEN ''HFM MAP'' ELSE ''NOT MAPPED'' END,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.BSS_ITEM_CDE, PSGL.BSS_ITEM_CDE, HFM.BSS_ITEM_CDE),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(PRD.BSS_ITEM_DESC, PSGL.BSS_ITEM_DESC, HFM.BSS_ITEM_DESC)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vBRLWorkDBName || '.SR_GL_EXPLO_SUBLEDGER DB'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN '|| vBRLWorkDBName || '.SR_LEAF_DEFAULTS HFM'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON DB.HFM_ACCOUNT_CODE = HFM.HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN '|| vBRLWorkDBName || '.SR_GL_LEAF_DEFAULTS PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON DB.HFM_ACCOUNT_CODE = PRD.HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND DB.PSGL_ACCOUNT_CODE = PRD.PSGL_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND DB.PSGL_PRODUCT_CODE = PRD.PSGL_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.PSGL_PRODUCT_CODE IS NOT NULL'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN '|| vBRLWorkDBName || '.SR_GL_LEAF_DEFAULTS PSGL'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON DB.HFM_ACCOUNT_CODE = PSGL.HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND DB.PSGL_ACCOUNT_CODE = PSGL.PSGL_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PSGL.PSGL_PRODUCT_CODE IS NULL'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN ' || vCNSUMVWDBName || '.MAPRAAU_PSGL_AFF_DEFAULTS AFF'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON DB.PSGL_AFFILIATE_CODE = AFF.AFFILIATE_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'SR_GL_MAP_DFLTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the HFM PSGL Deal Type Deal Sub Type combination work table in BRL layer
+--
+    SET vStepNbr = 27;
+    SET vSQL_Text = 'DELETE FROM ' || vBRLWorkDBName || '.SR_GL_PRD;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_GL_PRD', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO ' || vBRLWorkDBName || '.SR_GL_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || '( HFM_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_ACCOUNT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_AFFILIATE_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PSGL_BUSINESS_UNIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRODUCT_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEAL_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEAL_SUBTYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CHEQUE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,VALUATION_TYPE'||cLF;
+--    SET vSQL_Text = vSQL_Text || ' ,AMOUNT_FIELD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,AT_CALL_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ')'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT DISTINCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(SMAP.SR_ACCT, ''Unknown HFM Account''),'||cLF;
+    SET vSQL_Text = vSQL_Text || '       LNK.GL_AC,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       LNK.GL_PRD,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       LNK.AFFIL,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       LNK.BSNS_UNT,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       CASE AR.FDA_GRP'||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_loan'' THEN ''LN'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_interest_bearing_accounts'' THEN ''DP'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_tfi_trn_bond'' THEN ''SE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_tfi_trn_equity'' THEN ''SE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_lease'' THEN ''LN'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_money_market'' THEN ''CA'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_repo_style'' THEN ''RE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_tfi_trn_future'' THEN ''DE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_tfi_trn_option'' THEN ''DE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_credit_derivatives'' THEN ''DE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_forex'' THEN ''DE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_fra'' THEN ''DE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_futures'' THEN ''DE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_swap_fx'' THEN ''DE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_trn_swap_ip'' THEN ''DE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_facility'' THEN ''LI'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          WHEN ''t_fixed_asset'' THEN ''AT'''||cLF;
+    SET vSQL_Text = vSQL_Text || '          ELSE '''''||cLF;
+    SET vSQL_Text = vSQL_Text || '       END AS Product_Type,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       AR.CNFRM_DEAL_TY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       AR.CNFRM_DEAL_SUB_TY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(BRO.CC_VAL_INFRC_NM_47, '''') AS CHEQUE_IND,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       AR.INFRC_VALTN_TY AS VALTN_TY,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       AR.DEBIT_CREDIT_IND,'||cLF;
+    SET vSQL_Text = vSQL_Text || '       COALESCE(BRO.CC_VAL_INFRC_NM_50, '''') AS AT_CALL_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vBRLGENVWDBName || '.EFFV_OUT_AR_TO_GL_LNK LNK'||cLF;
+    SET vSQL_Text = vSQL_Text || 'INNER JOIN'||cLF;
+    SET vSQL_Text = vSQL_Text || '(SELECT AR_SRC'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,AR_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,FDA_GRP'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CNFRM_DEAL_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CNFRM_DEAL_SUB_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,INFRC_VALTN_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,BLC_VALTN_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CASE WHEN VALTN_AMT < 0 THEN ''C'' ELSE ''D'' END AS DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM ' || vBRLVWDBName || '.UNPIVOT_INP_AR_VALTN'||cLF;
+    SET vSQL_Text = vSQL_Text || ' UNION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' SELECT AR_SRC'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,AR_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,FDA_GRP'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CNFRM_DEAL_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CNFRM_DEAL_SUB_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,INFRC_VALTN_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,BLC_VALTN_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || '    ,CASE WHEN VALTN_AMT < 0 THEN ''C'' ELSE ''D'' END AS DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM ' || vBRLVWDBName || '.UNPIVOT_INP_AR_ACCT_VALTN'||cLF;
+    SET vSQL_Text = vSQL_Text || ') AR'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON LNK.AR_SRC = AR.AR_SRC'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND LNK.AR_ID = AR.AR_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND LNK.BAL_TY = AR.BLC_VALTN_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT OUTER JOIN ' || vBRLVWDBName || '.PIVOT_BRO_AR BRO'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON LNK.AR_SRC = BRO.AR_SRC'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND LNK.AR_ID = BRO.AR_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT OUTER JOIN ' || vCNSUMVWDBName || '.SR_GL_ACCT_MAP SMAP'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON LNK.GL_AC = SMAP.GL_ACCT;'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'SR_GL_PRD', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the Product Map Defaults work table in BRL Layer
+--   First where the Debit Credit Indicator is not blank
+--
+    SET vStepNbr = 28;
+    SET vSQL_Text = 'DELETE FROM ' || vBRLWorkDBName || '.PRD_DEFAULTS;';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'PRD_DEFAULTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO ' || vBRLWorkDBName || '.PRD_DEFAULTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '( DEAL_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEAL_SUBTYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CHEQUE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,AT_CALL_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,VALUATION_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,OVERRIDE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REGULATORY_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_CDE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BAL_CLASS'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_DC_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_RESECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ASSET_BACKED'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRD_REPO_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SETT_CREDIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_CONVERTIBLE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_TANGIBLE_ASSETS'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_BS_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_NEAR_FAR_INDIC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ENTRY_TYPE)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT DISTINCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   dflt.DEAL_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.DEAL_SUBTYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.CHEQUE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.AT_CALL_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.VALUATION_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.OVERRIDE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.REGULATORY_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.BSS_ITEM_CDE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.BSS_ITEM_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.BAL_CLASS'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_DC_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_SECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_RESECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_ASSET_BACKED'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.PRD_REPO_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_SETT_CREDIT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_CONVERTIBLE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_TANGIBLE_ASSETS'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_BS_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.MAT_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_NEAR_FAR_INDIC'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_ENTRY_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vCNSUMVWDBName || '.MAPRAAU_PROD_DEFAULTS dflt'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE dflt.DEBIT_CREDIT_IND <> '''';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'PRD_DEFAULTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+--   Next where the Debit Credit Indicator is blank explode for 'C' and 'D' values
+--
+    SET vStepNbr = 29;
+    SET vSQL_Text = 'INSERT INTO ' || vBRLWorkDBName || '.PRD_DEFAULTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '( DEAL_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEAL_SUBTYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,CHEQUE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,AT_CALL_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,VALUATION_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,OVERRIDE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REGULATORY_PRODUCT_CODE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_CDE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSS_ITEM_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,AMOUNT_FIELD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_DC_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_RESECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ASSET_BACKED'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRD_REPO_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_SETT_CREDIT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_CONVERTIBLE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_TANGIBLE_ASSETS'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_BS_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,MAT_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_NEAR_FAR_INDIC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,TYP_ENTRY_TYPE)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT DISTINCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '   dflt.DEAL_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.DEAL_SUBTYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.CHEQUE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.AT_CALL_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.VALUATION_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,cjn_dc.DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.OVERRIDE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.REGULATORY_PRODUCT_CODE'||cLF;
+	SET vSQL_Text = vSQL_Text || '  ,dflt.BSS_ITEM_CDE'||cLF;
+	SET vSQL_Text = vSQL_Text || '  ,dflt.BSS_ITEM_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.BAL_CLASS'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_DC_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_SECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_RESECURITISATION'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_ASSET_BACKED'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.PRD_REPO_PRODUCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_SETT_CREDIT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_CONVERTIBLE'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_TANGIBLE_ASSETS'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_BS_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.MAT_INDICATOR'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_NEAR_FAR_INDIC'||cLF;
+    SET vSQL_Text = vSQL_Text || '  ,dflt.TYP_ENTRY_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vCNSUMVWDBName || '.MAPRAAU_PROD_DEFAULTS dflt'||cLF;
+    SET vSQL_Text = vSQL_Text || 'CROSS JOIN'||cLF;
+    SET vSQL_Text = vSQL_Text || '(SELECT DEBIT_CREDIT_IND FROM (SELECT ''C'' AS DEBIT_CREDIT_IND) cd1 UNION SELECT DEBIT_CREDIT_IND FROM (SELECT ''D'' AS DEBIT_CREDIT_IND) cd2'||cLF;
+    SET vSQL_Text = vSQL_Text || ') cjn_dc'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE dflt.DEBIT_CREDIT_IND = '''''||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND NOT EXISTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '(SELECT'||cLF;
+    SET vSQL_Text = vSQL_Text || '  xx.DEAL_TYPE, xx.DEAL_SUBTYPE, xx.VALUATION_TYPE, xx.DEBIT_CREDIT_IND, xx.CHEQUE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' FROM ' || vBRLWorkDBName || '.PRD_DEFAULTS xx'||cLF;
+    SET vSQL_Text = vSQL_Text || ' WHERE xx.DEAL_TYPE = dflt.DEAL_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' AND   xx.DEAL_SUBTYPE = dflt.DEAL_SUBTYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' AND   xx.VALUATION_TYPE = dflt.VALUATION_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || ' AND   xx.DEBIT_CREDIT_IND = cjn_dc.DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' AND   xx.CHEQUE_IND = dflt.CHEQUE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' AND   xx.AT_CALL_IND = dflt.AT_CALL_IND);'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLWorkDBName, 'PRD_DEFAULTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+--
+-- Populate the Interface HFM PSGL Map Defaults table in BRL layer
+--   Truncate records for current Business Date
+--
+    SET vStepNbr = 30;
+    SET vSQL_Text = 'DELETE FROM ' || vBRLVWDBName || '.SR_GL_PRD_MAP_DFLTS'||cLF;
+    SET vSQL_Text = vSQL_Text || 'WHERE BSNS_DT = DATE ''' || vBssns_Date || ''';';
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'SR_GL_PRD_MAP_DFLTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    SET vSQL_Text = 'INSERT INTO ' || vBRLVWDBName || '.SR_GL_PRD_MAP_DFLTS'||cLF;
+    SET vSQL_Text = vSQL_Text || '( BSNS_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,SR_AC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,GL_AC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,GL_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,AFFIL'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BSNS_UNT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRD_GRP'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,PRD_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_CHQ_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,DR_CR_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,BAL_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_AT_CALL_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_BAL_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_PRD_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REG_PRD_CD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REG_BSS_ID'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,REG_BSS_DESC'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_DC_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_SCRTZN'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_RESCRTIZ'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_ASSET_BKCD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_REPO_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_SETL_CR'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_CONV'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_TNGBL_ASSET'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_BAL_SHEET'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_MTRTY_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_NEAR_FAR_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,INFRC_ENTRY_TY'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,EFFV_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,EXPR_DT'||cLF;
+    SET vSQL_Text = vSQL_Text || ' ,USR_ID)'||cLF;
+    SET vSQL_Text = vSQL_Text || 'SELECT DISTINCT'||cLF;
+    SET vSQL_Text = vSQL_Text || '    DATE ''' || vBssns_Date || ''''||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.HFM_ACCOUNT_CODE, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.PSGL_ACCOUNT_CODE, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.PSGL_PRODUCT_CODE, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.PSGL_AFFILIATE_CODE, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.PSGL_BUSINESS_UNIT, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.DEAL_TYPE, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.DEAL_SUBTYPE, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.CHEQUE_IND, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.DEBIT_CREDIT_IND, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.VALUATION_TYPE, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.AT_CALL_INDICATOR, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.AMOUNT_FIELD, B.BAL_TY, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(PRD.PRODUCT_TYPE, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.REGULATORY_PRODUCT_CODE, B.REG_PRD_CD, '''')'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.BSS_ITEM_CDE, B.REG_BSS_ID)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.BSS_ITEM_DESC, B.REG_BSS_DESC)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_DC_INDICATOR, B.INFRC_DC_IND)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_SECURITISATION, B.INFRC_SCRTZN)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_RESECURITISATION, B.INFRC_RESCRTIZ)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_ASSET_BACKED, B.INFRC_ASSET_BKCD)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.PRD_REPO_PRODUCT, B.INFRC_REPO_PRD)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_SETT_CREDIT, B.INFRC_SETL_CR)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_CONVERTIBLE, B.INFRC_CONV)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_TANGIBLE_ASSETS, B.INFRC_TNGBL_ASSET)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_BS_INDICATOR, B.INFRC_BAL_SHEET)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.MAT_INDICATOR, B.INFRC_MTRTY_IND)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_NEAR_FAR_INDIC, B.INFRC_NEAR_FAR_IND)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,COALESCE(C.TYP_ENTRY_TYPE, B.INFRC_ENTRY_TY)'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,CURRENT_DATE'||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,DATE ''9999-12-31'''||cLF;
+    SET vSQL_Text = vSQL_Text || '   ,CASE WHEN C.DEAL_TYPE IS NOT NULL THEN ''DEAL TYPE MAP OVERRIDE'''||cLF;
+    SET vSQL_Text = vSQL_Text || '         WHEN B.SR_AC IS NOT NULL THEN ''HFM PSGL MAP'' ELSE ''NOT MAPPED'' END'||cLF;
+    SET vSQL_Text = vSQL_Text || 'FROM ' || vBRLWorkDBName || '.SR_GL_PRD PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN ' || vBRLVWDBName || '.SR_GL_MAP_DFLTS B'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON PRD.HFM_ACCOUNT_CODE = B.SR_AC'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.PSGL_ACCOUNT_CODE = B.GL_AC'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.PSGL_BUSINESS_UNIT = B.BSNS_UNT'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.PSGL_PRODUCT_CODE = B.GL_PRD'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.PSGL_AFFILIATE_CODE = B.AFFIL'||cLF;
+    SET vSQL_Text = vSQL_Text || 'LEFT JOIN ' || vBRLWorkDBName || '.PRD_DEFAULTS C'||cLF;
+    SET vSQL_Text = vSQL_Text || 'ON PRD.DEAL_TYPE = C.DEAL_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.DEAL_SUBTYPE = C.DEAL_SUBTYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.VALUATION_TYPE = C.VALUATION_TYPE'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.CHEQUE_IND = C.CHEQUE_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.DEBIT_CREDIT_IND = C.DEBIT_CREDIT_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND PRD.AT_CALL_INDICATOR = C.AT_CALL_IND'||cLF;
+    SET vSQL_Text = vSQL_Text || 'AND C.OVERRIDE_IND = ''Y'''||cLF;
+    SET vSQL_Text = vSQL_Text || ';'||cLF;
+    CALL QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG(vSQL_Text, vStoredProcName, vSQLStep, vBssns_Date, 'Y', vBRLTDBName, 'SR_GL_PRD_MAP_DFLTS', vExecute_Flag, oSubReturn_Code, oSubReturn_Message);
+    IF oSubReturn_Code <> 0 THEN
+        SET oReturn_Code = oSubReturn_Code;
+        SET oReturn_Message = oSubReturn_Message;
+        LEAVE MAIN;
+    END IF;
+    SET vSQLStep = vSQLStep + 1;
+
+    IF vExecute_Flag = 'Y' THEN
+        SET oReturn_Message = 'Create and Load Cascading Defaults for '||vBssns_Date||'. Completed Successfully';
+    ELSE
+        SET oReturn_Message = 'Create SQL only for '||vBssns_Date||' in T_SQL_Log BRL table. Completed Successfully';
+    END IF;
+
+    SET oReturn_Code = 0;
+
+END MAIN;
+--------------------------------------------------------------------------------
