@@ -1,0 +1,375 @@
+REPLACE	PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BRLMD_RTN_WHERE
+-- =============================================
+-- AUTHOR           :               PRALHAD KAMATH
+-- CREATE DATE   	:               23  DEC  2015
+-- DESCRIPTION   	:               CONSUMPTION LAYER
+-- VERSION          :               1.1V
+-- =============================================
+-- =============================================
+--    Change log
+-- [28 JAN 2016]: Modified to add Error Handeling
+-- [23 Mar 2016]: Fixed it to append a single quotes to each token if multiple comma separated values are passed in Criteria field
+-- (31 Marc 2016): Added condition to handle no values in where table
+-- (31 May 2016) : Added RAW join condition which bypasses all validations and is to be used when all else fails
+-- =============================================
+-- Stored Procedure Parameters
+(
+IN vname VARCHAR (32), 
+OUT o_count VARCHAR(1000),
+OUT ORETURN_CODE                   SMALLINT,             /* 0: SUCCESSFUL*/
+OUT ORETURN_MESSAGE                VARCHAR(250)
+)
+MAIN:
+BEGIN	
+-- Declare variables
+DECLARE	v_str VARCHAR(1000);
+DECLARE	SqlStr VARCHAR(500);
+DECLARE oSubReturn_Code             SMALLINT;
+DECLARE oSubReturn_Message          VARCHAR(1000);
+-- Error Handler variables
+DECLARE	vSQL_Code                   INTEGER;
+DECLARE	vSQL_State                  VARCHAR(6) DEFAULT ''XC;
+DECLARE	vError_Text                 VARCHAR(1999);
+DECLARE vWhr_Crit VARCHAR(1000) DEFAULT '';
+DECLARE vCnt SMALLINT DEFAULT 0;
+DECLARE	vCOUNT                   INTEGER;
+
+DECLARE	EXIT HANDLER FOR SQLEXCEPTION
+BEGIN	
+	--
+	-- Preserve Diagnostic Codes from errored Statement
+	--
+	SET	vSQL_Code  = 0;
+	SET	vSQL_State = 0;
+	SET	vError_Text = ' ';
+	GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+
+	SET	oReturn_Code = 1;
+	SET	oReturn_Message = 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+END;
+
+/* ----------------------------------- Perform Error Checking --------------------------------------------------------------------------------*/
+
+/*******************NO DATA IN WHERE STARTS***************************/
+SELECT	COUNT(*) INTO :vCOUNT
+FROM	QSIT_APRA2_BRL_RRP_VW.BRLMD_Whr_Clause 
+WHERE View_Name = vname;
+		
+IF	vCOUNT = 0 
+	THEN
+		SET	o_count = 'WHERE  1=1'||';';
+	    SET	oReturn_Code = 0;
+		SET	oReturn_Message = 'No where condition mentioned';
+		LEAVE MAIN;
+END IF	;
+
+/*******************NO DATA IN WHERE ENDS***************************/
+
+SET	v_str = '';
+--LOGIC OF WHERE STATEMENT
+L1: 
+FOR	CSR1 AS 
+	SELECT Whr_Tbl, Whr_Col, Whr_Join, Whr_Crit  --Whr_Tbl||'.'||Whr_Col||' '||Whr_Join||' '''||Whr_Crit||'''' AS WHR
+	FROM QSIT_APRA2_BRL_RRP_VW.BRLMD_Whr_Clause 
+	WHERE	View_Name =   vname
+	GROUP BY 1, 2, 3, 4
+	ORDER BY 1, 2, 3, 4
+
+
+ DO
+----------
+SET vCnt = 1;
+SET vWhr_Crit = '';
+--- CHANGES FOR RAW JOIN
+IF CSR1.Whr_Join <> 'RAW' THEN 
+--- END CHANGES FOR RAW JOIN
+L2:
+WHILE STRTOK(CSR1.Whr_Crit, ',', vCnt) IS NOT NULL DO
+BEGIN
+	
+	SET vWhr_Crit = vWhr_Crit || 
+CASE	
+	WHEN vCnt = 1 THEN '' 
+	ELSE ''',''' 
+end	|| TRIM(STRTOK(CSR1.Whr_Crit, ',', vCnt));
+	SET vCnt = vCnt + 1;
+
+END;
+END WHILE L2;
+
+CASE 
+	WHEN CSR1.Whr_Col<>CSR1.Whr_Crit  -- LHS = RHS are skipped here; they are added to allow select to work properly
+	AND CSR1.Whr_Join = 'IS' THEN 
+SET	v_str = v_str ||'AND '||CSR1.Whr_Tbl||'.'||CSR1.Whr_Col||' '||CSR1.Whr_Join||' '||vWhr_Crit||'
+';
+	WHEN CSR1.Whr_Col<>CSR1.Whr_Crit  THEN									--	Added Logic for Inline View
+SET	v_str = v_str ||'AND '||CSR1.Whr_Tbl||'.'||CSR1.Whr_Col||' '||CSR1.Whr_Join||' ('''||vWhr_Crit||''')'||'
+';
+	ELSE 
+SET v_str = v_str ;
+END CASE; 
+--- CHANGES FOR RAW JOIN
+ELSE
+
+
+SET v_str = v_str || 'AND '|| CSR1.Whr_Crit||'
+';
+
+END IF;
+--- END CHANGES FOR RAW JOIN
+---------
+END FOR	L1;
+
+IF	vname   IN (
+	SELECT	COALESCE (View_Name, '') 
+	FROM	QSIT_APRA2_BRL_RRP_VW.BRLMD_Whr_Clause
+	WHERE	1=1 
+	AND	Whr_Tbl<>'' 
+	AND	Whr_Col<>'' 
+	AND	Whr_Join<>'' 
+	AND	Whr_Crit<>''
+--	AND TRIM(Whr_Col) <> TRIM(Whr_Crit)
+	AND View_Name = vname
+	GROUP BY 1)
+THEN
+	SET	o_count = 'WHERE  1=1
+'|| v_str||'  ;';
+
+	IF vname   IN (
+		SELECT	COALESCE (View_Name, '') 
+		FROM	QSIT_APRA2_BRL_RRP_VW.BRLMD_Whr_Clause
+		WHERE 1=1 
+		--- CHANGES FOR RAW JOIN
+		AND Whr_Join <> 'RAW'
+		---  END CHANGES FOR RAW JOIN
+		AND	(Whr_Tbl='' 
+		OR	Whr_Col='' 
+		OR	Whr_Join='' 
+		OR	Whr_Crit='')
+		AND View_Name = vname
+		GROUP BY 1)
+		THEN
+		SET VSQL_CODE  = 20;
+		SET VSQL_STATE = 1020;  
+		SET VERROR_TEXT ='Either of the input attributes is Blank - WHERE statement';
+
+		INSERT INTO QSIT_APRA2_BRL_RRP_VW.Log_Table_BRL 
+VALUES	(vSQL_Code, vSQL_State, vError_Text, CURRENT_TIMESTAMP);
+
+		SET oReturn_Code = 20;
+		SET oReturn_Message ='Either of the input attributes is Blank - WHERE statement';
+		LEAVE MAIN;
+	END IF;
+	ELSE	
+	SET	oReturn_Message = 'Invalid View Name provided from WHERE statement';
+	LEAVE MAIN;
+END IF	;
+
+SET	oReturn_Code = 0;
+SET	oReturn_Message = 'WHERE Statement - Success';
+END MAIN;
+--------------------------------------------------------------------------------
+
+REPLACE	PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BRLMD_RTN_WHERE_QSIT
+-- =============================================
+-- AUTHOR           :               PRALHAD KAMATH
+-- CREATE DATE   	:               23  DEC  2015
+-- DESCRIPTION   	:               CONSUMPTION LAYER
+-- VERSION          :               1.1V
+-- =============================================
+-- =============================================
+--    Change log
+-- [28 JAN 2016]: Modified to add Error Handeling
+-- [23 Mar 2016]: Fixed it to append a single quotes to each token if multiple comma separated values are passed in Criteria field
+-- (31 Marc 2016): Added condition to handle no values in where table
+-- (31 May 2016) : Added RAW join condition which bypasses all validations and is to be used when all else fails
+-- =============================================
+-- Stored Procedure Parameters
+(
+IN vname VARCHAR (32), 
+IN vi_tablename VARCHAR(32),
+OUT o_count VARCHAR(1000),
+OUT ORETURN_CODE                   SMALLINT,             /* 0: SUCCESSFUL*/
+OUT ORETURN_MESSAGE                VARCHAR(250)
+)
+MAIN:
+BEGIN	
+-- Declare variables
+DECLARE	v_str VARCHAR(1000);
+DECLARE	SqlStr VARCHAR(500);
+DECLARE oSubReturn_Code             SMALLINT;
+DECLARE oSubReturn_Message          VARCHAR(1000);
+-- Error Handler variables
+DECLARE	vSQL_Code                   INTEGER;
+DECLARE	vSQL_State                  VARCHAR(6) DEFAULT ''XC;
+DECLARE	vError_Text                 VARCHAR(1999);
+DECLARE vWhr_Crit VARCHAR(1000) DEFAULT '';
+DECLARE vCnt SMALLINT DEFAULT 0;
+DECLARE	vCOUNT                   INTEGER;
+
+DECLARE	EXIT HANDLER FOR SQLEXCEPTION
+BEGIN	
+	--
+	-- Preserve Diagnostic Codes from errored Statement
+	--
+	SET	vSQL_Code  = 0;
+	SET	vSQL_State = 0;
+	SET	vError_Text = ' ';
+	GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+
+	SET	oReturn_Code = 1;
+	SET	oReturn_Message = 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+END;
+
+/* ----------------------------------- Perform Error Checking --------------------------------------------------------------------------------*/
+
+/*******************NO DATA IN WHERE STARTS***************************/
+SELECT	COUNT(*) INTO :vCOUNT
+FROM	QSIT_APRA2_BRL_RRP_VW.BRLMD_Whr_Clause 
+WHERE View_Name = vname;
+		
+IF	vCOUNT = 0 
+	THEN
+		SET	o_count = 'WHERE  1=1';
+	    SET	oReturn_Code = 0;
+		SET	oReturn_Message = 'No where condition mentioned';
+		LEAVE MAIN;
+END IF	;
+
+/*******************NO DATA IN WHERE ENDS***************************/
+
+SET	v_str = '';
+--LOGIC OF WHERE STATEMENT
+L1: 
+FOR	CSR1 AS 
+	SELECT Whr_Tbl, Whr_Col, Whr_Join, Whr_Crit  --Whr_Tbl||'.'||Whr_Col||' '||Whr_Join||' '''||Whr_Crit||'''' AS WHR
+	FROM QSIT_APRA2_BRL_RRP_VW.BRLMD_Whr_Clause 
+	WHERE	View_Name =   vname
+	AND Whr_Tbl = vi_tablename
+	GROUP BY 1, 2, 3, 4
+	ORDER BY 1, 2, 3, 4
+
+
+ DO
+----------
+SET vCnt = 1;
+SET vWhr_Crit = '';
+--- CHANGES FOR RAW JOIN
+IF CSR1.Whr_Join <> 'RAW' THEN 
+--- END CHANGES FOR RAW JOIN
+L2:
+WHILE STRTOK(CSR1.Whr_Crit, ',', vCnt) IS NOT NULL DO
+BEGIN
+	
+	SET vWhr_Crit = vWhr_Crit || 
+CASE	
+	WHEN vCnt = 1 THEN '' 
+	ELSE ''',''' 
+end	|| TRIM(STRTOK(CSR1.Whr_Crit, ',', vCnt));
+	SET vCnt = vCnt + 1;
+
+END;
+END WHILE L2;
+
+CASE 
+	WHEN CSR1.Whr_Col<>CSR1.Whr_Crit  -- LHS = RHS are skipped here; they are added to allow select to work properly
+	AND CSR1.Whr_Join = 'IS' THEN 
+SET	v_str = v_str ||'AND '||CSR1.Whr_Tbl||'.'||CSR1.Whr_Col||' '||CSR1.Whr_Join||' '||vWhr_Crit||'
+';
+	WHEN CSR1.Whr_Col<>CSR1.Whr_Crit  THEN									--	Added Logic for Inline View
+SET	v_str = v_str ||'AND '|| CSR1.Whr_Col||' '||CSR1.Whr_Join||' ('''||vWhr_Crit||''')'||'
+';
+ 
+
+	ELSE 
+SET v_str = v_str ;
+END CASE; 
+--- CHANGES FOR RAW JOIN
+ELSE
+
+
+SET v_str = v_str || 'AND '|| CSR1.Whr_Crit||'
+';
+
+END IF;
+--- END CHANGES FOR RAW JOIN
+---------
+END FOR	L1;
+
+IF	vname   IN (
+	SELECT	COALESCE (View_Name, '') 
+	FROM	QSIT_APRA2_BRL_RRP_VW.BRLMD_Whr_Clause
+	WHERE	1=1 
+	AND	Whr_Tbl<>'' 
+	AND	Whr_Col<>'' 
+	AND	Whr_Join<>'' 
+	AND	Whr_Crit<>''
+--	AND TRIM(Whr_Col) <> TRIM(Whr_Crit)
+	AND View_Name = vname
+	GROUP BY 1)
+THEN
+	SET	o_count = 'WHERE  1=1
+'|| v_str;
+
+	IF vname   IN (
+		SELECT	COALESCE (View_Name, '') 
+		FROM	QSIT_APRA2_BRL_RRP_VW.BRLMD_Whr_Clause
+		WHERE 1=1 
+		--- CHANGES FOR RAW JOIN
+		AND Whr_Join <> 'RAW'
+		---  END CHANGES FOR RAW JOIN
+		AND	(Whr_Tbl='' 
+		OR	Whr_Col='' 
+		OR	Whr_Join='' 
+		OR	Whr_Crit='')
+		AND View_Name = vname
+		GROUP BY 1)
+		THEN
+		SET VSQL_CODE  = 20;
+		SET VSQL_STATE = 1020;  
+		SET VERROR_TEXT ='Either of the input attributes is Blank - WHERE statement';
+
+		INSERT INTO QSIT_APRA2_BRL_RRP_VW.Log_Table_BRL 
+VALUES	(vSQL_Code, vSQL_State, vError_Text, CURRENT_TIMESTAMP);
+
+		SET oReturn_Code = 20;
+		SET oReturn_Message ='Either of the input attributes is Blank - WHERE statement';
+		LEAVE MAIN;
+	END IF;
+	ELSE	
+	SET	oReturn_Message = 'Invalid View Name provided from WHERE statement';
+	LEAVE MAIN;
+END IF	;
+
+SET	oReturn_Code = 0;
+SET	oReturn_Message = 'WHERE Statement - Success';
+END MAIN;
+--------------------------------------------------------------------------------
+
+REPLACE MACRO QSIT_APRA2_BRL_RRP_PGM.BSNSMD_DELETE_OBSOLETE_RULES (
+-- This macro will delete records from all config tables for a obsolete rule id
+Rul_Id INTEGER
+)
+AS (
+
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.RUL_TRG_DTL WHERE RUL_ID = :Rul_Id;
+INSERT INTO QSIT_APRA2_BRL_RRP_WK.BSNSMD_LOG VALUES (SESSION, USER, 'BSNSMD_DELETE_OBSOLETE_RULES', 100, 'For Rul_Id = ' || TRIM(:Rul_Id) || ' Rows deleted from RUL_TRG_DTL : ', CURRENT_TIMESTAMP(6));
+
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.LST_VAL WHERE LST_ID IN (SELECT LST_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_ATTR WHERE RUL_ID  = :Rul_Id GROUP BY 1);
+INSERT INTO QSIT_APRA2_BRL_RRP_WK.BSNSMD_LOG VALUES (SESSION, USER, 'BSNSMD_DELETE_OBSOLETE_RULES', 200, 'For Rul_Id = ' || TRIM(:Rul_Id) || ' Rows deleted from LST_VAL : ', CURRENT_TIMESTAMP(6));
+
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.LST_RNG WHERE LST_ID IN (SELECT LST_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_ATTR WHERE RUL_ID  = :Rul_Id GROUP BY 1);
+INSERT INTO QSIT_APRA2_BRL_RRP_WK.BSNSMD_LOG VALUES (SESSION, USER, 'BSNSMD_DELETE_OBSOLETE_RULES', 300, 'For Rul_Id = ' || TRIM(:Rul_Id) || ' Rows deleted from LST_RNG : ', CURRENT_TIMESTAMP(6));
+
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.LST_MSTR WHERE LST_ID IN (SELECT LST_ID FROM QSIT_APRA2_BRL_RRP_VW.RUL_ATTR WHERE RUL_ID  = :Rul_Id GROUP BY 1);
+INSERT INTO QSIT_APRA2_BRL_RRP_WK.BSNSMD_LOG VALUES (SESSION, USER, 'BSNSMD_DELETE_OBSOLETE_RULES', 400, 'For Rul_Id = ' || TRIM(:Rul_Id) || ' Rows deleted from LST_MSTR : ', CURRENT_TIMESTAMP(6));
+
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.RUL_ATTR WHERE RUL_ID  = :Rul_Id;
+INSERT INTO QSIT_APRA2_BRL_RRP_WK.BSNSMD_LOG VALUES (SESSION, USER, 'BSNSMD_DELETE_OBSOLETE_RULES', 500, 'For Rul_Id = ' || TRIM(:Rul_Id) || ' Rows deleted from RUL_ATTR : ', CURRENT_TIMESTAMP(6));
+
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.RUL_MSTR WHERE RUL_ID  = :Rul_Id;
+INSERT INTO QSIT_APRA2_BRL_RRP_WK.BSNSMD_LOG VALUES (SESSION, USER, 'BSNSMD_DELETE_OBSOLETE_RULES', 600, 'For Rul_Id = ' || TRIM(:Rul_Id) || ' Rows deleted from RUL_MSTR : ', CURRENT_TIMESTAMP(6));
+
+);
+--------------------------------------------------------------------------------
+
