@@ -1,0 +1,423 @@
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BRL_EXEC_AND_LOG
+-- =============================================
+-- Description: This procedure executes and Logs Dynamic SQL. Also Collects Stats
+-- Change log
+--      [2016 06 23]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(
+ IN iSQL_Txt                   VARCHAR(16384),
+ IN iStoredProcName            VARCHAR(128),
+ INOUT ioSQLStep               INTEGER,
+ IN iBssns_Date                CHAR(10),
+ IN iClctSts_Flag              CHAR(1),
+ IN iClctSts_DB_Nm             VARCHAR(128),
+ IN iClctSts_Table_Nm          VARCHAR(128),
+ IN iExecution_Flag            CHAR(1),
+--
+-- Possible Values
+--   Y  Execute Transform View SQL. Capture SQL in V_SQL_Log.
+--   N  Do not Execute Transform View SQL. Capture SQL in V_SQL_Log.
+--
+ OUT oReturn_Code              SMALLINT,             /* 0: Successful; 1: Error */
+ OUT oReturn_Message           VARCHAR(1000)
+)
+MAIN:
+BEGIN
+--
+---------------------------------------------------------------------------------------------
+-- Variables declaration
+---------------------------------------------------------------------------------------------       
+--
+-- Declare Constants
+--
+DECLARE vBRLVWDBName                VARCHAR(128) DEFAULT 'QSIT_APRA2_BRL_RRP_VW';
+DECLARE vStoredProcName             VARCHAR(128) DEFAULT 'BRL_EXEC_AND_LOG';
+DECLARE vORplChar                   INTEGER DEFAULT 7000;                           -- Block size for OREPLACE to process
+DECLARE vNbrQtes                    INTEGER DEFAULT 500;                            -- Number of consecutive single quotes cannot exceed
+DECLARE vNbrBlks                    INTEGER DEFAULT 3;                              -- Number of Blocks before exceeding 16K SQL_Txt size
+DECLARE cLF                         CHAR(2) DEFAULT '0A'XC;
+--
+--
+-- Declare variables
+--
+DECLARE vSQL_Log_StartTS            VARCHAR(26);
+DECLARE vSQL_Log_EndTS              VARCHAR(26);
+DECLARE vCtr1                       INTEGER;
+DECLARE vCtr2                       INTEGER;
+DECLARE vPos1                       INTEGER;
+DECLARE vSQL_SubTxt                 VARCHAR(8000);
+DECLARE vSQL_OTxt                   VARCHAR(16384) DEFAULT '';
+DECLARE vSQL_Msg                    VARCHAR(16384) DEFAULT '';
+--
+-- Declare Error Handler variables
+--
+DECLARE vSQL_Code                   INTEGER;
+DECLARE vSQL_State                  VARCHAR(6) DEFAULT ''XC;
+DECLARE vError_Text                 VARCHAR(256);
+--
+-- Error Handler
+--
+	DECLARE EXIT HANDLER FOR SQLEXCEPTION
+	BEGIN
+--
+-- Preserve Diagnostic Codes from errored Statement
+--
+		SET vSQL_Code  = SQLCODE;
+		SET vSQL_State = SQLSTATE;
+		GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+		SET oReturn_Code = 1;
+		SET oReturn_Message = 'Stored Procedure = '||vStoredProcName||', SQL Step Nbr = '||TRIM(ioSQLStep)||cLF||'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	END
+	;
+--
+-- OREPLACE has 8000 limit for VARCHAR
+--   Loop through blocks of 7000 characters
+--   Ensure each block of characters does not end on a single quote
+--      vPos1 is the position in iSQL_Txt during Outer Loop
+--      vCtr1 is the Outer Loop iteration counter (OREPLACE Blocks)
+--      vCtr2 is the Inner Loop iteration counter (consequetive single quotes)
+--
+    IF CHARS(iSQL_Txt) > vORplChar THEN
+        SET vCtr1 = 1;
+        SET vPos1 = 0;
+        SET vSQL_OTxt = '';
+        L1: LOOP
+            SET vCtr2 = 0;
+            L2: LOOP
+                IF SUBSTRING(iSQL_Txt FROM vPos1 + vORplChar - vCtr2 FOR 1) = '''' THEN
+                    SET vCtr2 = vCtr2 + 1;
+                ELSE
+                    SET vSQL_SubTxt = SUBSTRING(iSQL_Txt FROM vPos1 FOR vORplChar - vCtr2);
+                    SET vPos1 = vPos1 + vORplChar - vCtr2 + 1;
+                    LEAVE L2;
+                END IF;
+                IF vCtr2 > vNbrQtes THEN
+                    SET oReturn_Code = 1;
+                    SET oReturn_Message = 'SQL Step Nbr = '||TRIM(CAST(ioSQLStep AS VARCHAR(5)))||'. SQL Text has over 500 quotes!!!!';
+                    LEAVE MAIN;
+                END IF;
+            END LOOP L2;
+            SET vSQL_OTxt = vSQL_OTxt||OREPLACE(vSQL_SubTxt, '''', '''''');
+            SET vCtr1 = vCtr1 + 1;
+            IF SUBSTRING(iSQL_Txt FROM vPos1 FOR vORplChar) = '' THEN
+                LEAVE L1;
+            END IF;
+            IF vCtr1 > vNbrBlks THEN
+                SET oReturn_Code = 1;
+                SET oReturn_Message = 'SQL Step Nbr = '||TRIM(CAST(ioSQLStep AS VARCHAR(5)))||'. SQL Text has over 16,384 Bytes!!!!';
+                LEAVE MAIN;
+            END IF;
+        END LOOP L1;
+    ELSE
+        SET vSQL_OTxt = OREPLACE(iSQL_Txt, '''', '''''');
+    END IF;
+--
+SET oReturn_Code = 0;
+SET oReturn_Message = '';
+--
+-- Execute the SQL
+--  and save the SQL in V_SQL_Log Table in BRL
+--
+    SET vSQL_Log_StartTS = CAST((CURRENT_TIMESTAMP(6) (FORMAT 'YYYY-MM-DDbHH:MI:SSDS(6)')) AS CHAR(26));
+    SET vSQL_Msg = 'INSERT INTO '||vBRLVWDBName||'.V_SQL_Log VALUES(''' || iStoredProcName || ''', ' || ioSQLStep || ', ''' || vSQL_OTxt || ''', DATE ''' || iBssns_Date || ''', TIMESTAMP ''' || vSQL_Log_StartTS || ''', NULL)';
+    EXECUTE IMMEDIATE vSQL_Msg;
+    IF iExecution_Flag = 'Y' THEN
+        EXECUTE IMMEDIATE iSQL_Txt;
+    END IF;
+    SET vSQL_Log_EndTS = CAST((CURRENT_TIMESTAMP(6) (FORMAT 'YYYY-MM-DDbHH:MI:SSDS(6)')) AS CHAR(26));
+    SET vSQL_Msg = 'UPDATE '||vBRLVWDBName||'.V_SQL_Log SET SQL_Log_EndTimeStamp = TIMESTAMP '''||vSQL_Log_EndTS||''' WHERE SP_Name = '''||iStoredProcName||''' AND Bssns_Date = DATE ''' || iBssns_Date || ''' AND SQL_Step = ' || ioSQLStep;
+    EXECUTE IMMEDIATE vSQL_Msg;
+--
+-- Check if Collecting Statistics
+--  and save the SQL in SQL Log Table in BRL
+--
+    IF iClctSts_Flag = 'Y' THEN
+        SET vSQL_OTxt = 'COLLECT STATISTICS ON ' || iClctSts_DB_Nm || '.' || iClctSts_Table_Nm || ';';
+        SET ioSQLStep = ioSQLStep + 1;
+        SET vSQL_Log_StartTS = CAST((CURRENT_TIMESTAMP(6) (FORMAT 'YYYY-MM-DDbHH:MI:SSDS(6)')) AS CHAR(26));
+        SET vSQL_Msg = 'INSERT INTO '||vBRLVWDBName||'.V_SQL_Log VALUES(''' || iStoredProcName || ''', ' || ioSQLStep || ', ''' || vSQL_OTxt || ''', DATE ''' || iBssns_Date || ''', TIMESTAMP ''' || vSQL_Log_StartTS || ''', NULL)';
+        EXECUTE IMMEDIATE vSQL_Msg;
+        IF iExecution_Flag = 'Y' THEN
+            EXECUTE IMMEDIATE vSQL_OTxt;
+        END IF;
+        SET vSQL_Log_EndTS = CAST((CURRENT_TIMESTAMP(6) (FORMAT 'YYYY-MM-DDbHH:MI:SSDS(6)')) AS CHAR(26));
+        SET vSQL_Msg = 'UPDATE '||vBRLVWDBName||'.V_SQL_Log SET SQL_Log_EndTimeStamp = TIMESTAMP '''||vSQL_Log_EndTS||''' WHERE SP_Name = '''||iStoredProcName||''' AND Bssns_Date = DATE ''' || iBssns_Date || ''' AND SQL_Step = ' || ioSQLStep;
+        EXECUTE IMMEDIATE vSQL_Msg;
+    END IF;
+
+END MAIN;
+--------------------------------------------------------------------------------
+
+REPLACE	PROCEDURE QSIT_APRA2_BRL_RRP_PGM.BRL_GENERATE_METADATA 
+( 
+ IN I_V_SCHEMANAME VARCHAR(128)
+,IN I_V_PATTERN VARCHAR(128)
+,IN I_V_EFFV_DT DATE
+,OUT O_I_RETURNSTATUS INTEGER
+,OUT O_V_RETURNMESSAGE VARCHAR(2000)
+)
+-- =============================================
+-- DESCRIPTION: THIS PROCEDURE WILL GENERATE THE BSNS RULES METADATA (ENTITY & ATTRIBUTE MASTER)
+-- CHANGE LOG
+--      [2015 01 27]: INITIAL VERSION 
+--  	[2015 01 29] : BUG FIX - ADDED ENTITY ID JOIN IN ATTR MASTER CURSOR
+-- =============================================
+-- STORED PROCEDURE PARAMETERS
+MAIN:
+BEGIN	
+DECLARE	V_PATTERN VARCHAR(33);
+DECLARE	I_COUNT INTEGER;
+DECLARE	I_INSERTCOUNT INTEGER;
+DECLARE VEFFV_DT VARCHAR(10);
+DECLARE	V_RETURNMESSAGE VARCHAR(2000);
+DECLARE VCOUNT INTEGER;
+DECLARE	VCNTR 							INTEGER DEFAULT 100;
+DECLARE	VLOGMSG 						VARCHAR(1000);
+DECLARE	VLOGMSGVARIABLE 				VARCHAR(40000);
+DECLARE	VDEBUGLVL 						SMALLINT DEFAULT 5; -- 5 = VERBOSE
+DECLARE	VLOGSPNAME 						VARCHAR(255) DEFAULT 'BRL_GENERATE_METADATA';
+DECLARE	OSUBRETURN_CODE                	SMALLINT;
+DECLARE OSUBRETURN_MESSAGE         		VARCHAR(1000);
+
+SELECT COUNT(*)
+INTO :VCOUNT
+FROM QSIT_APRA2_BRL_RRP_VW.PRMTR_MSTR
+WHERE PRMTR_VAL = I_V_SCHEMANAME
+AND PRMTR_NM LIKE '%DB_NM';
+
+IF VCOUNT = 0 THEN
+SET VCNTR = VCNTR + 1; -- INCREASE STEP NUMBER BY 1
+SET	VLOGMSGVARIABLE = 'PROCESS - FAILED. INVALID SCHEMA NAME SUBMITTED = ' ||I_V_SCHEMANAME;
+SET VLOGMSG = VLOGMSGVARIABLE;
+SET	VDEBUGLVL = 1;
+CALL	QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (VLOGSPNAME, VCNTR, VLOGMSG, VDEBUGLVL, OSUBRETURN_CODE, OSUBRETURN_MESSAGE);
+SET O_I_RETURNSTATUS = 2  ;
+SET O_V_RETURNMESSAGE = VLOGMSG;		
+LEAVE MAIN;
+END IF;	
+
+
+IF I_V_SCHEMANAME = 'QSIT_APRA2_CNSUM_RRP_GEN_VW' THEN
+	SET V_PATTERN = 'OUT'||'%';
+ELSE
+	SET	V_PATTERN = UPPER(COALESCE(I_V_PATTERN,'') || '%');
+END IF;
+
+SET	I_COUNT = 100;
+SET	I_INSERTCOUNT = 0;
+SET VEFFV_DT = CAST(CAST (I_V_EFFV_DT AS DATE FORMAT 'YYYY-MM-DD') AS VARCHAR(30));
+	
+SELECT	COALESCE(MAX(ENT_ID), 0) INTO I_COUNT 
+FROM	 QSIT_APRA2_BRL_RRP_VW.ENT_MSTR;
+
+L1: 
+FOR	CSR1 AS 
+
+SEL	TABLENAME 
+FROM	DBC.TABLESV D 
+LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR
+	ON	TABLENAME=ENT_NM
+WHERE	DATABASENAME  = I_V_SCHEMANAME
+	AND	UPPER(TABLENAME) LIKE V_PATTERN
+	AND	TABLEKIND IN ('T','V')
+	AND	ENT_NM IS NULL 
+ORDER	BY 1
+
+DO
+----------
+
+SET	I_COUNT = I_COUNT + 1;
+
+INSERT	INTO QSIT_APRA2_BRL_RRP_VW.ENT_MSTR (ENT_ID, ENT_NM,SCHM_NM, EFFV_DT, EXPR_DT, USR_ID) 
+VALUES	(I_COUNT, CSR1.TABLENAME,I_V_SCHEMANAME, VEFFV_DT (DATE), '9999-12-31' (DATE), USER);
+
+SET	I_INSERTCOUNT = I_INSERTCOUNT + 1;
+----------
+END FOR	L1;
+
+
+SET	V_RETURNMESSAGE = 'NO OF ROWS INSERTED INTO ENT_MSTR: '|| TRIM(I_INSERTCOUNT);
+SET	I_INSERTCOUNT = 0;
+
+SELECT COALESCE(MAX(ATTR_ID), 0) INTO I_COUNT 
+FROM	 QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR;
+
+L2: 
+FOR	CSR2 AS 
+
+
+SELECT	ENT.ENT_ID, COL.COLUMNNAME
+FROM	DBC.COLUMNSV COL
+INNER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR ENT
+	ON	COL.TABLENAME = ENT.ENT_NM
+LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR ATTRIB
+	ON	ATTRIB.ATTR_NM = COL.COLUMNNAME
+	AND	ATTRIB.ENT_ID = ENT.ENT_ID
+WHERE	 1=1
+	AND	COL.DATABASENAME = I_V_SCHEMANAME
+	AND	ATTRIB.ATTR_ID IS NULL
+	AND COL.COLUMNNAME NOT IN ('EFFV_DT','EXPR_DT','USR_ID')
+	AND COL.COLUMNNAME NOT LIKE '%CSTM%'  -- A SEPARATE SECTION HAS BEEN ADDED BELOW TO HANDLE CUSTOM FIELD
+ORDER	BY 1,2
+
+
+DO
+----------
+
+SET	I_COUNT = I_COUNT + 1;
+
+INSERT	INTO QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR (ATTR_ID, ENT_ID, ATTR_NM, EFFV_DT, EXPR_DT, USR_ID) 
+VALUES	(I_COUNT, CSR2.ENT_ID, CSR2.COLUMNNAME, VEFFV_DT (DATE), '9999-12-31' (DATE), USER);
+
+SET	I_INSERTCOUNT = I_INSERTCOUNT + 1;
+----------
+END FOR	L2;
+
+SET	V_RETURNMESSAGE = V_RETURNMESSAGE || '; NO OF ROWS INSERTED INTO ATTR_MSTR: '|| TRIM(I_INSERTCOUNT);
+SET	O_I_RETURNSTATUS = 0;
+
+---------- DELETE ORPHAN RECORDS FROM ATTR_MSTR
+
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR
+WHERE (ATTR_ID, ENT_ID) IN (											
+											SELECT	ATTRIB.ATTR_ID, ATTRIB.ENT_ID
+											FROM	QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR ATTRIB
+											LEFT OUTER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR ENT
+												ON ATTRIB.ENT_ID = ENT.ENT_ID
+											LEFT OUTER JOIN DBC.COLUMNSV COL
+												ON	ATTRIB.ATTR_NM = COL.COLUMNNAME
+												AND	COL.TABLENAME = ENT.ENT_NM
+												AND	COL.DATABASENAME = I_V_SCHEMANAME
+											WHERE	 1=1
+												AND ATTRIB.ATTR_NM  NOT IN ('EFFV_DT','EXPR_DT','USR_ID')
+												AND COL.COLUMNNAME IS NULL )
+AND ENT_ID IN ( SELECT ENT.ENT_ID FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR ENT WHERE ENT.SCHM_NM = I_V_SCHEMANAME);
+
+--SET I_INSERTCOUNT = ACTIVITY_COUNT;
+SET	V_RETURNMESSAGE = V_RETURNMESSAGE || '; NO OF ORPHAN ROWS DELETED FROM ATTR_MSTR: '||TRIM(COALESCE (ACTIVITY_COUNT,0));
+SET	O_I_RETURNSTATUS = 0;
+
+---------- DELETE ORPHAN RECORDS FROM ENT_MSTR
+
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.ENT_MSTR 
+WHERE ENT_ID IN (
+									SELECT	ENT_ID
+									FROM	 QSIT_APRA2_BRL_RRP_VW.ENT_MSTR
+									LEFT OUTER JOIN DBC.TABLESV D 
+										ON	TABLENAME=ENT_NM
+									    AND 	DATABASENAME  = I_V_SCHEMANAME
+									    AND	TABLEKIND IN ('T','V')
+									WHERE D.TABLENAME IS NULL )
+AND SCHM_NM = I_V_SCHEMANAME;
+
+--SET I_INSERTCOUNT = ACTIVITY_COUNT;
+SET	V_RETURNMESSAGE = V_RETURNMESSAGE || '; NO OF ORPHAN ROWS DELETED FROM ENT_MSTR: '||TRIM(COALESCE (ACTIVITY_COUNT,0));
+SET	O_I_RETURNSTATUS = 0;
+
+-- UPDATE BUSINESS ATTRIBUTE NAME 
+UPDATE QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR SET BSNS_ATTR_NM = OREPLACE(ATTR_NM,'_',' ')
+WHERE BSNS_ATTR_NM IS NULL AND ATTR_NM IS NOT NULL;
+
+SET	V_RETURNMESSAGE = V_RETURNMESSAGE || '; NO OF BUSINESS ATTRIBUTE NAME UPDATED: '||TRIM(COALESCE (ACTIVITY_COUNT,0));
+SET	O_I_RETURNSTATUS = 0;
+
+-- UPDATE BUSINESS ENTITY NAME 
+UPDATE QSIT_APRA2_BRL_RRP_VW.ENT_MSTR SET BSNS_ENT_NM = OREPLACE(ENT_NM,'_',' ')
+WHERE BSNS_ENT_NM IS NULL AND ENT_NM IS NOT NULL;
+
+SET	V_RETURNMESSAGE = V_RETURNMESSAGE || '; NO OF BUSINESS ENTITY NAME UPDATED: '||TRIM(COALESCE (ACTIVITY_COUNT,0));
+SET	O_I_RETURNSTATUS = 0;
+
+-- SECTION FOR CUSTOM FIELDS 
+
+-- DELETE ORPHAN CSTM FIELDS 
+DELETE FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR 
+WHERE ATTR_NM LIKE '%CSTM%' 
+AND (BSNS_ATTR_NM, ENT_ID) NOT IN (SELECT BSNS_ATTR_NM, ENT_ID 
+																	FROM 
+																	--- CSTM LOGIC STARTS
+																	(SELECT AM_MAX.MAX_ID + ROW_NUMBER() OVER (ORDER BY ATTR_NM) AS ATTR_ID
+																	,EM.ENT_ID AS ENT_ID
+																	,OREPLACE (BRL.COL_MAP_TGT_COL, '_MDID', '') AS ATTR_NM
+																	,CL.COL_MAP_FMT AS BSNS_ATTR_NM
+																	,NULL AS DATA_TY
+																	,NULL AS IS_PK
+																	,VEFFV_DT (DATE) AS EFFV_DT
+																	,'9999-12-31' (DATE) AS EXPR_DT
+																	,USER AS USR_ID
+
+																	FROM (
+																	SELECT COL_MAP_SRC_TBL, COL_MAP_TGT_TBL, COL_MAP_TGT_COL, COL_MAP_SRC_COL, COL_MAP_FMT 
+																	FROM QSIT_APRA2_BRL_RRP_VW.BRLMD_COLUMN_MAPPING
+																	GROUP BY 1, 2, 3, 4, 5
+																	) BRL
+
+																	INNER JOIN (
+																	SELECT COL_MAP_SRC_TBL, COL_MAP_TGT_TBL, COL_MAP_TGT_COL, COL_MAP_SRC_COL, COL_MAP_FMT 
+																	FROM QSIT_APRA2_BRL_RRP_VW.CLMD_COLUMN_MAPPING
+																	WHERE COL_MAP_TGT_COL LIKE '%CSTM%MDID'
+																	AND COL_MAP_TYPE = 'STATICVAL'
+																	GROUP BY 1, 2, 3, 4, 5
+																	) CL
+																	ON BRL.COL_MAP_SRC_TBL = CL.COL_MAP_TGT_TBL
+																	AND BRL.COL_MAP_SRC_COL = CL.COL_MAP_TGT_COL
+
+																	CROSS JOIN (SELECT MAX(ATTR_ID) AS MAX_ID FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR) AM_MAX
+
+																	INNER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR EM
+																	ON EM.ENT_NM = BRL.COL_MAP_TGT_TBL ) A --- CSTM LOGIC ENDS
+															GROUP BY 1, 2
+);
+
+SET	V_RETURNMESSAGE = V_RETURNMESSAGE || '; NO OF ORPHAN CSTM FIELD ROWS DELETED FROM ATTR_MSTR: '||TRIM(COALESCE (ACTIVITY_COUNT,0));
+SET	O_I_RETURNSTATUS = 0;
+
+-- INSERT NEW CSTM FIELDS THAT DOESN'T ALREADY EXIST 
+INSERT INTO QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR (ATTR_ID, ENT_ID, ATTR_NM, BSNS_ATTR_NM, DATA_TY, IS_PK, EFFV_DT, EXPR_DT, USR_ID)
+SELECT ATTR_ID, ENT_ID, ATTR_NM, BSNS_ATTR_NM, DATA_TY, IS_PK,EFFV_DT, EXPR_DT, USR_ID 
+-- NOTE: CSTM LOGIC IN THIS SECTION IS EXACTLY SAME AS ABOVE
+FROM --- CSTM LOGIC STARTS		
+																(SELECT AM_MAX.MAX_ID + ROW_NUMBER() OVER (ORDER BY ATTR_NM) AS ATTR_ID
+																,EM.ENT_ID AS ENT_ID
+																,OREPLACE (BRL.COL_MAP_TGT_COL, '_MDID', '') AS ATTR_NM
+																,CL.COL_MAP_FMT AS BSNS_ATTR_NM
+																,NULL AS DATA_TY
+																,NULL AS IS_PK
+																,VEFFV_DT (DATE) AS EFFV_DT
+																,'9999-12-31' (DATE) AS EXPR_DT
+																,USER AS USR_ID
+
+																FROM (
+																SELECT COL_MAP_SRC_TBL, COL_MAP_TGT_TBL, COL_MAP_TGT_COL, COL_MAP_SRC_COL, COL_MAP_FMT 
+																FROM QSIT_APRA2_BRL_RRP_VW.BRLMD_COLUMN_MAPPING
+																GROUP BY 1, 2, 3, 4, 5
+																) BRL
+
+																INNER JOIN (
+																SELECT COL_MAP_SRC_TBL, COL_MAP_TGT_TBL, COL_MAP_TGT_COL, COL_MAP_SRC_COL, COL_MAP_FMT 
+																FROM QSIT_APRA2_BRL_RRP_VW.CLMD_COLUMN_MAPPING
+																WHERE COL_MAP_TGT_COL LIKE '%CSTM%MDID'
+																AND COL_MAP_TYPE = 'STATICVAL'
+																GROUP BY 1, 2, 3, 4, 5
+																) CL
+																ON BRL.COL_MAP_SRC_TBL = CL.COL_MAP_TGT_TBL
+																AND BRL.COL_MAP_SRC_COL = CL.COL_MAP_TGT_COL
+
+																CROSS JOIN (SELECT MAX(ATTR_ID) AS MAX_ID FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR) AM_MAX
+
+																INNER JOIN QSIT_APRA2_BRL_RRP_VW.ENT_MSTR EM
+																ON EM.ENT_NM = BRL.COL_MAP_TGT_TBL ) A --- CSTM LOGIC ENDS
+
+WHERE  (BSNS_ATTR_NM, ENT_ID) NOT IN (SELECT BSNS_ATTR_NM, ENT_ID FROM QSIT_APRA2_BRL_RRP_VW.ATTR_MSTR )
+AND BSNS_ATTR_NM IS NOT NULL 
+AND BSNS_ATTR_NM <> '';
+
+SET	O_V_RETURNMESSAGE = V_RETURNMESSAGE || '; NO OF CSTM FIELD ROWS INSERTED IN ATTR_MSTR: '||TRIM(COALESCE (ACTIVITY_COUNT,0));
+SET	O_I_RETURNSTATUS = 0;
+
+END;
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+
