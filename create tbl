@@ -1,0 +1,268 @@
+REPLACE PROCEDURE QSIT_APRA2_BRL_RRP_PGM.CreateSingleTableViews
+-- =============================================
+-- Description: This Stored Procedure will perform insert into BSNS metadata tables from uploader intermediate table.
+-- Change log
+--      [2015 02 04]: Initial version 
+-- =============================================
+-- Stored Procedure Parameters
+(
+IN Exec_In CHAR(1),
+IN iSrcDatabaseName VARCHAR(255),
+IN iTrgDatabaseName VARCHAR(255),
+IN iTableNamePattern VARCHAR(255), -- Pass null  if want to execute for all tables
+IN Is_Exact_Match CHAR(1), -- Y will look for exact match of the table name
+IN iWhereClause VARCHAR(1000),  -- Pass null if no where clause. If there is any standard where condition is to be added i.e. pick only active records.
+IN iViewNamePrefix VARCHAR(10), -- Pass null for no prefix
+IN iViewNameSuffix VARCHAR(10), --- Pass null for no suffix
+OUT oSQL_Text VARCHAR(10000), -- Output SQL
+OUT oReturn_Code SMALLINT, -- 0: Successful; Non-Zero: Error 
+OUT oReturn_Message VARCHAR(1000)
+)
+MAIN:
+BEGIN
+-- Declare variables
+DECLARE cLF CHAR(2) DEFAULT '0A'XC;
+DECLARE vTableNamePattern VARCHAR(255);
+DECLARE vWhereClause VARCHAR(1000);
+DECLARE vViewNamePrefix VARCHAR(10);
+DECLARE vViewNameSuffix VARCHAR(10);
+DECLARE vCounter INTEGER;
+DECLARE vSQL_Text_ColList VARCHAR(10000) DEFAULT '';
+DECLARE vSQL_Text VARCHAR(10000) DEFAULT '';
+DECLARE vCntr INTEGER DEFAULT 100;
+DECLARE vSQL_Code INTEGER;
+DECLARE vSQL_State VARCHAR(6);
+DECLARE vError_Text VARCHAR(256);
+DECLARE oSubReturn_Code SMALLINT;
+DECLARE oSubReturn_Message VARCHAR(1000);
+DECLARE vDebugLvl SMALLINT DEFAULT 5; -- 5 = verbose
+DECLARE vLogMsg VARCHAR(10000);
+DECLARE vLogSPName VARCHAR(255) DEFAULT 'CreateSingleTableViews';
+
+-- Error Handler
+DECLARE EXIT HANDLER FOR SQLEXCEPTION
+BEGIN
+    SET vSQL_Code  = SQLCODE;
+    SET vSQL_State = SQLSTATE;
+    GET DIAGNOSTICS EXCEPTION 1 vError_Text = MESSAGE_TEXT;
+    
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''SQLEXCEPTION'') - ' || 'SQL Exception, SQLCODE = '||TRIM(vSQL_Code)||', SQLSTATE = '||vSQL_State||', Error Msg = '||vError_Text;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+    SET oReturn_Code = 2;
+    SET oReturn_Message = vLogMsg;
+END;
+
+-- If attribute name is not returned by above query, then throw an user error and stop the process
+DECLARE EXIT HANDLER FOR NOT FOUND
+BEGIN	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = 'Failed (Exited at handler ''NOT FOUND'') - ' || 'Failure at next step of the step which says ''' || vLogMsg || ''' because no rows were returned from the sql.';
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	SET oReturn_Code = 1;
+	SET oReturn_Message = vLogMsg;
+END;
+
+-- ***********************************  Program End
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Started';
+SET vDebugLvl = 0;
+--CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+
+IF iTableNamePattern IS NULL THEN 
+	SET vTableNamePattern = '' ;
+ELSE 
+	IF Is_Exact_Match = 'Y' THEN 
+		SET vTableNamePattern = iTableNamePattern ;
+	ELSE 
+		SET vTableNamePattern = '%' || iTableNamePattern || '%' ;
+	END IF;
+END IF;
+
+IF iWhereClause IS NULL THEN 
+	SET vWhereClause = '' ;
+ELSE 
+SET vWhereClause = iWhereClause ;
+END IF;
+
+IF iViewNamePrefix IS NULL THEN 
+	SET vViewNamePrefix = '' ;
+ELSE 
+	SET vViewNamePrefix = iViewNamePrefix ;
+END IF;
+
+IF iViewNameSuffix IS NULL THEN 
+	SET vViewNameSuffix = '' ;
+ELSE 
+	SET vViewNameSuffix = iViewNameSuffix ;
+END IF;
+
+L1:
+FOR CSR1 AS 
+	SELECT	
+	TRIM (DataBaseName) AS SrcDatabaseName,
+	TRIM (TABLENAME) AS SrcTableName
+	FROM dbc.TablesV
+	WHERE TRIM (DataBaseName) = iSrcDatabaseName
+	AND TRIM(TABLENAME) LIKE vTableNamePattern 
+	UNION 
+	SELECT	
+	TRIM (DataBaseName) AS SrcDatabaseName,
+	TRIM (TABLENAME) AS SrcTableName
+	FROM dbc.TablesV
+	WHERE TRIM (DataBaseName) = iSrcDatabaseName
+	AND TRIM(TABLENAME) = vTableNamePattern 
+	ORDER BY 2
+DO
+	SET vCounter = 0;
+	SET vSQL_Text_ColList = '';
+	SET vSQL_Text = 'REPLACE VIEW ' || iTrgDatabaseName || '.' || vViewNamePrefix || CSR1.SrcTableName || vViewNameSuffix || cLF;
+	SET vSQL_Text = vSQL_Text || '(' || cLF;
+	L2:
+	FOR	CSR2 AS 
+		SELECT	
+		 TRIM (DataBaseName) AS SrcDatabaseName,
+		 TRIM (TABLENAME) AS SrcTableName,
+		 TRIM (ColumnName) AS SrcColumnName
+		 FROM dbc.ColumnsV
+		 WHERE TRIM (DataBaseName) = CSR1.SrcDatabaseName
+		 AND TRIM (TABLENAME) = CSR1.SrcTableName
+		 ORDER BY ColumnId	
+	DO
+		IF vCounter = 0 THEN 
+			SET vSQL_Text_ColList = vSQL_Text_ColList || ' ' || CSR2.SrcColumnName || cLF;
+		ELSE
+			SET vSQL_Text_ColList = vSQL_Text_ColList || ',' || CSR2.SrcColumnName || cLF;
+		END IF;		
+		SET vCounter = vCounter + 1;	
+	END FOR L2;
+	
+	SET vSQL_Text = vSQL_Text || vSQL_Text_ColList;
+	SET vSQL_Text = vSQL_Text || ')' || cLF;
+	SET vSQL_Text = vSQL_Text || 'AS LOCKING ROW FOR ACCESS' || cLF;
+	SET vSQL_Text = vSQL_Text || 'SELECT' || cLF;
+	SET vSQL_Text = vSQL_Text || vSQL_Text_ColList; 
+	SET vSQL_Text = vSQL_Text || 'FROM ' || CSR1.SrcDatabaseName || '.' || CSR1.SrcTableName || cLF;
+	IF vWhereClause <> '' THEN
+		SET vSQL_Text = vSQL_Text || vWhereClause || cLF;
+	END IF;
+	
+	SET vSQL_Text = vSQL_Text || ';';
+	
+	-- Message Log portion
+	SET vCntr = vCntr + 1; -- Increase step number by 1
+	SET vLogMsg = vSQL_Text;
+	SET oSQL_Text = vSQL_Text;
+	SET vDebugLvl = 0;
+	CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	
+	IF Exec_In = 'Y' THEN
+		EXECUTE IMMEDIATE vSQL_Text;
+		-- Message Log portion
+		SET vCntr = vCntr + 1; -- Increase step number by 1
+		SET vLogMsg = 'View ' || CSR1.SrcDatabaseName || '.' || CSR1.SrcTableName || ' created.';
+		SET vDebugLvl = 1;
+		CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+	END IF;
+	
+END FOR L1;
+
+-- ***********************************  Program End
+
+-- Message Log portion
+SET vCntr = vCntr + 1; -- Increase step number by 1
+SET vLogMsg = 'Process - Completed';
+SET vDebugLvl = 0;
+--CALL QSIT_APRA2_BRL_RRP_PGM.BSNSMD_ERRORLOG (vLogSPName, vCntr, vLogMsg, vDebugLvl, oSubReturn_Code, oSubReturn_Message);
+SET oReturn_Code = 0;
+SET oReturn_Message = vLogMsg;
+
+END MAIN;
+
+
+--Database Comparison
+
+
+REPLACE	PROCEDURE SIT07_BRL_RRP_PGM. DB_COMPARE (IN vi_frm_dbname VARCHAR (32), IN vi_to_dbname VARCHAR(32),  OUT ov_str VARCHAR(1000))
+BEGIN	
+ 
+DECLARE	v_Str_Tbl_List VARCHAR(1000);
+DECLARE	v_Str_Tbl_Nm VARCHAR(1000);
+
+-- LIST OF OBJECTS PRESENT  IN BOTH THE DATABASES
+L1: 
+FOR	CSR1 AS 
+SEL	
+TABLENAME 
+FROM	DBC.COLUMNSV 
+WHERE	DATABASENAME = vi_frm_dbname
+AND	TABLENAME IN 
+(
+SEL	TABLENAME 
+FROM	DBC.COLUMNSV 
+WHERE	DATABASENAME =vi_to_dbname
+)
+GROUP BY TABLENAME ORDER BY 1
+
+DO
+----------
+
+
+ SET v_Str_Tbl_List = CSR1.TABLENAME;
+ 
+ -- CHECK IF OBJECT'S ATTRIBUTE OF 'FROM DATABASE' IS NOT PRESENT IN  'TO DATABASE'
+L2: 
+FOR	CSR2 AS 
+  SELECT 
+ TABLENAME,
+ COLUMNNAME  ,
+ COLUMNFORMAT  ,
+ COLUMNTYPE  
+FROM
+DBC.COLUMNSV    
+WHERE DATABASENAME = vi_frm_dbname
+AND   TABLENAME = v_Str_Tbl_List
+AND (COLUMNNAME, COLUMNFORMAT, COLUMNTYPE)
+ NOT IN 
+(
+SELECT 
+ COLUMNNAME  ,
+ COLUMNFORMAT  ,
+ COLUMNTYPE  
+FROM
+DBC.COLUMNSV    
+WHERE DATABASENAME =vi_to_dbname
+AND TABLENAME = v_Str_Tbl_List
+)
+
+DO
+----------
+
+  SET v_Str_Tbl_Nm =  CSR2.TABLENAME;
+  
+--LOAD THE MISMATCH INTO A WORK TABLE 
+   
+INSERT INTO SIT07_BRL_RRP_WK.DB_MSMTCH(vi_frm_dbname,CSR2.TABLENAME, CSR2.COLUMNNAME, CSR2.COLUMNFORMAT,CSR2.COLUMNTYPE,'Not Present in '||trim(vi_to_dbname));
+DELETE FROM SIT07_BRL_RRP_WK.DB_MSMTCH WHERE TABLENAME IS NULL;
+  
+
+----------
+END FOR L2;
+
+----------
+END FOR L1;
+
+IF  v_Str_Tbl_Nm <> ''
+THEN
+SET ov_str=  'Mismatch found between '||vi_frm_dbname||' and '||vi_to_dbname;
+ELSE
+SET ov_str=  'No Mismatch found between '||vi_frm_dbname||' and '||vi_to_dbname;
+END IF;
+
+END;
+
